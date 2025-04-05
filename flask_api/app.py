@@ -4,6 +4,9 @@ Sugessted Code for Users uploaded facial images to be recognized by the robot
 pip3 install flask flask-cors face_recognition numpy opencv-python
 
 Create a python scripts on the Raspery Pi
+
+This Script is our Flask API server, meant to run on the Raspberry Pi. It acts as a bridge between:
+The Flutter app (which sends images) and the Pi, which stores/encodes them for facial recognition.
 '''
 from flask import Flask, request, jsonify
 import os
