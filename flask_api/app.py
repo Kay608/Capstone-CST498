@@ -13,6 +13,7 @@ import os
 import face_recognition
 import cv2
 import numpy as np
+import pickle
 
 app = Flask(__name__)
 
@@ -39,6 +40,13 @@ def load_known_faces():
             if encodings:
                 known_encodings.append(encodings[0])
                 known_names.append(filename.split(".")[0])  # Use filename as the name
+                
+    with open("encodings.pkl", "wb") as f:
+    pickle.dump({
+        "encodings": known_encodings,
+        "names": known_names
+    }, f)
+    print("[INFO] encodings.pkl updated.")
 
 @app.route('/upload', methods=['POST'])
 def upload_image():
