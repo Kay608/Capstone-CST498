@@ -1,0 +1,8 @@
+# 🧪 Legacy Testing Scripts
+
+This folder contains early test scripts used for local development.
+
+- `face_register.py`: Captures and saves face encodings using your laptop/PC webcam. Only for development use.
+- `face_recognizer.py`: Tests face recognition without needing the robot or Raspberry Pi.
+
+These scripts are not used in the final deployment, but were helpful during early development.

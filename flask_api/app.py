@@ -1,13 +1,3 @@
-'''
-Sugessted Code for Users uploaded facial images to be recognized by the robot
-**Install Raspberry Pi Packages
-pip3 install flask flask-cors face_recognition numpy opencv-python
-
-Create a python scripts on the Raspery Pi
-
-This Script is our Flask API server, meant to run on the Raspberry Pi. It acts as a bridge between:
-The Flutter app (which sends images) and the Pi, which stores/encodes them for facial recognition.
-'''
 from flask import Flask, request, jsonify
 import os
 import face_recognition
@@ -40,12 +30,13 @@ def load_known_faces():
             if encodings:
                 known_encodings.append(encodings[0])
                 known_names.append(filename.split(".")[0])  # Use filename as the name
-                
+
+    # Save encodings to a file
     with open("encodings.pkl", "wb") as f:
-    pickle.dump({
-        "encodings": known_encodings,
-        "names": known_names
-    }, f)
+        pickle.dump({
+            "encodings": known_encodings,
+            "names": known_names
+        }, f)
     print("[INFO] encodings.pkl updated.")
 
 @app.route('/upload', methods=['POST'])
@@ -90,107 +81,3 @@ def recognize_face():
 if __name__ == '__main__':
     load_known_faces()  # Load faces when the server starts
     app.run(host='0.0.0.0', port=5000)
-
-**App collect facial images and send to raspery pi to be learned
-Dependencies:
-dependencies:
-  flutter:
-    sdk: flutter
-  image_picker: ^1.0.4
-  http: ^0.13.6
-Run: flutter pub get
-*Implement Image Capture and Upload
-import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:http/http.dart' as http;
-import 'package:path/path.dart';
-import 'package:mime/mime.dart';
-
-void main() {
-  runApp(MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: FaceUploadScreen(),
-    );
-  }
-}
-
-class FaceUploadScreen extends StatefulWidget {
-  @override
-  _FaceUploadScreenState createState() => _FaceUploadScreenState();
-}
-
-class _FaceUploadScreenState extends State<FaceUploadScreen> {
-  File? _image;
-  final picker = ImagePicker();
-  final String serverUrl = "http://192.168.1.100:5000/upload"; // Replace with your Raspberry Pi's IP
-
-  Future<void> _pickImage() async {
-    final pickedFile = await picker.pickImage(source: ImageSource.camera);
-    
-    if (pickedFile != null) {
-      setState(() {
-        _image = File(pickedFile.path);
-      });
-    }
-  }
-
-  Future<void> _uploadImage() async {
-    if (_image == null) return;
-
-    var uri = Uri.parse(serverUrl);
-    var request = http.MultipartRequest('POST', uri);
-
-    request.fields['name'] = "JohnDoe"; // Replace with actual username
-    request.files.add(await http.MultipartFile.fromPath(
-      'image',
-      _image!.path,
-      contentType: MediaType.parse(lookupMimeType(_image!.path) ?? "image/jpeg"),
-    ));
-
-    var response = await request.send();
-
-    if (response.statusCode == 200) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Image uploaded successfully!")),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Upload failed!")),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text("Face Recognition Upload")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _image != null
-                ? Image.file(_image!, height: 200)
-                : Text("No image selected"),
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _pickImage,
-              child: Text("Take Photo"),
-            ),
-            SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: _uploadImage,
-              child: Text("Upload Photo"),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
