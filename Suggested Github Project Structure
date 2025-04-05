@@ -1,0 +1,15 @@
+/AI-Food-Delivery-Bot
+├── ai_facial_recognition.py          # NEW: Final working recognition script
+├── face_register.py                  # Lets you capture + save new user faces
+├── encodings.pkl                     # Auto-generated after running face_register.py
+├── flask_api/
+│   ├── app.py                        # Flask server to receive/upload/recognize faces
+│   ├── uploads/                      # Folder to store user-uploaded face images
+├── mobile_app/
+│   ├── lib/
+│   │   └── main.dart                 # Flutter app source
+│   ├── pubspec.yaml                  # Flutter config with dependencies (image_picker, http)
+├── README.md                         # Explain the project + setup
+├── requirements.txt                  # Python dependencies (optional)
+└── docs/
+    └── facial_pipeline.md            # Optional: Explains the flow for professors
