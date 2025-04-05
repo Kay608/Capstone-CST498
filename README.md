@@ -23,3 +23,40 @@ Used to register users by capturing and uploading face images to the Flask API.
 
 ## 🗂️ File Structure
 
+/AI-Food-Delivery-Bot
+├── ai_facial_recognition.py          # FINAL robot-side script: does recognition + triggers
+├── encodings.pkl                     # Pickled face encodings, created from Flask API
+├── flask_api/                        # 🔥 Flask API for enrollment & recognition
+│   ├── app.py                        # Main Flask app (POST /upload, /recognize)
+│   ├── uploads/                      # Stores user-uploaded face images
+│   └── encodings.pkl                 # Could also live here and be shared with robot script
+├── mobile_app/                       # 📱 Flutter source code for the app
+│   ├── lib/
+│   │   └── main.dart                 # UI for camera + HTTP upload
+│   └── pubspec.yaml                  # Flutter dependencies
+├── legacy_testing/                  # 🧪 For non-production scripts (like local webcam tests)
+│   ├── face_register.py             # Manual script to enroll faces via webcam
+│   └── face_recognizer.py           # Optional: local-only version of ai_facial_recognition
+├── README.md                         # Project overview + setup
+├── requirements.txt                  # Flask, face_recognition, OpenCV, etc.
+└── docs/
+    └── facial_pipeline.md           # Optional
+
+-----------------------------------------------------------------
+
+
+## 🚀 How to Run
+
+### Backend (Flask API)
+```bash
+cd flask_api
+pip install -r ../requirements.txt
+python app.py
+
+Robot (Facial Recognition)
+python ai_facial_recognition.py
+
+Mobile App
+cd mobile_app
+flutter pub get
+flutter run
