@@ -1,15 +1,39 @@
 /AI-Food-Delivery-Bot
-├── ai_facial_recognition.py          # NEW: Final working recognition script
-├── face_register.py                  # Lets you capture + save new user faces
-├── encodings.pkl                     # Auto-generated after running face_register.py
-├── flask_api/
-│   ├── app.py                        # Flask server to receive/upload/recognize faces
-│   ├── uploads/                      # Folder to store user-uploaded face images
-├── mobile_app/
+├── ai_facial_recognition.py          # FINAL robot-side script: does recognition + triggers
+├── encodings.pkl                     # Pickled face encodings, created from Flask API
+├── flask_api/                        # 🔥 Flask API for enrollment & recognition
+│   ├── app.py                        # Main Flask app (POST /upload, /recognize)
+│   ├── uploads/                      # Stores user-uploaded face images
+│   └── encodings.pkl                 # Could also live here and be shared with robot script
+├── mobile_app/                       # 📱 Flutter source code for the app
 │   ├── lib/
-│   │   └── main.dart                 # Flutter app source
-│   ├── pubspec.yaml                  # Flutter config with dependencies (image_picker, http)
-├── README.md                         # Explain the project + setup
-├── requirements.txt                  # Python dependencies (optional)
+│   │   └── main.dart                 # UI for camera + HTTP upload
+│   └── pubspec.yaml                  # Flutter dependencies
+├── legacy_testing/                  # 🧪 For non-production scripts (like local webcam tests)
+│   ├── face_register.py             # Manual script to enroll faces via webcam
+│   └── face_recognizer.py           # Optional: local-only version of ai_facial_recognition
+├── README.md                         # Project overview + setup
+├── requirements.txt                  # Flask, face_recognition, OpenCV, etc.
 └── docs/
-    └── facial_pipeline.md            # Optional: Explains the flow for professors
+    └── facial_pipeline.md           # Optional: architectural explanation for the professor
+
+
+✅ Here's How It Should Work (Final Design)
+📲 Mobile App
+User opens the app, takes a photo
+
+App sends the image + name via POST request to /upload on the Flask server
+
+🌐 Flask Server (on the Pi)
+Saves the image to uploads/
+
+Extracts face encoding
+
+Appends it to known_encodings and known_names
+
+Done. Enrolled.
+
+🤖 Robot
+Just pulls known_encodings into memory (via pickle or dynamic reload)
+
+Uses its own camera for matching, but not enrollment
