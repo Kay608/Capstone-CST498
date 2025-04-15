@@ -4,6 +4,13 @@ import face_recognition
 import cv2
 import numpy as np
 import pickle
+from werkzeug.security import generate_password_hash, check_password_hash
+import jwt
+from functools import wraps
+from datetime import datetime, timedelta
+
+SECRET_KEY = 'your_secret_key_here'  # Change this in production!
+USERS_FILE = 'users.pkl'
 
 app = Flask(__name__)
 
@@ -14,6 +21,34 @@ if not os.path.exists(UPLOAD_FOLDER):
 
 known_encodings = []
 known_names = []
+
+def save_users(users):
+    with open(USERS_FILE, 'wb') as f:
+        pickle.dump(users, f)
+
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return {}
+    with open(USERS_FILE, 'rb') as f:
+        return pickle.load(f)
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            if auth_header.startswith('Bearer '):
+                token = auth_header.split(' ')[1]
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+        try:
+            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+            current_user = data['username']
+        except Exception as e:
+            return jsonify({'message': 'Token is invalid!'}), 401
+        return f(current_user, *args, **kwargs)
+    return decorated
 
 def load_known_faces():
     """Load saved faces from the 'uploads' folder"""
@@ -28,8 +63,11 @@ def load_known_faces():
             encodings = face_recognition.face_encodings(image)
 
             if encodings:
-                known_encodings.append(encodings[0])
-                known_names.append(filename.split(".")[0])  # Use filename as the name
+                # Extract user name from filename (before first underscore)
+                user = filename.split("_")[0]
+                for encoding in encodings:
+                    known_encodings.append(encoding)
+                    known_names.append(user)
 
     # Save encodings to a file
     with open("encodings.pkl", "wb") as f:
@@ -39,16 +77,47 @@ def load_known_faces():
         }, f)
     print("[INFO] encodings.pkl updated.")
 
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({'message': 'Username and password required'}), 400
+    users = load_users()
+    if username in users:
+        return jsonify({'message': 'User already exists'}), 400
+    users[username] = generate_password_hash(password)
+    save_users(users)
+    return jsonify({'message': 'User registered successfully'}), 201
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+    users = load_users()
+    if username not in users or not check_password_hash(users[username], password):
+        return jsonify({'message': 'Invalid credentials'}), 401
+    token = jwt.encode({
+        'username': username,
+        'exp': datetime.utcnow() + timedelta(hours=12)
+    }, SECRET_KEY, algorithm="HS256")
+    return jsonify({'token': token}), 200
+
 @app.route('/upload', methods=['POST'])
-def upload_image():
+@token_required
+def upload_image(current_user):
     """Receives an image from the mobile app and saves it"""
     if 'image' not in request.files:
         return jsonify({"message": "No image found"}), 400
 
     file = request.files['image']
-    name = request.form.get("name", "Unknown")
-
-    filepath = os.path.join(UPLOAD_FOLDER, f"{name}.jpg")
+    # Use username from token, not from form
+    name = current_user
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    filename = f"{name}_{timestamp}.jpg"
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
     file.save(filepath)
 
     # Reload faces after adding a new one

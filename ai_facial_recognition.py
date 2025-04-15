@@ -24,26 +24,35 @@ print("[INFO] Facial recognition active. Press ESC to quit.")
 
 while True:
     ret, frame = cam.read()
-    if not ret:
+    if not ret or frame is None:
+        print("[ERROR] Failed to grab frame from camera.")
         continue
-
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    try:
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    except Exception as e:
+        print(f"[ERROR] Failed to convert frame to RGB: {e}")
+        continue
     boxes = face_recognition.face_locations(rgb)
     encodings = face_recognition.face_encodings(rgb, boxes)
 
     for encoding, box in zip(encodings, boxes):
-        matches = face_recognition.compare_faces(known_encodings, encoding)
-        name = "Unknown"
-
-        if True in matches:
-            match_idx = matches.index(True)
-            name = known_names[match_idx]
-            print(f"[ACCESS GRANTED] Recognized: {name}")
-            # TODO: Replace this with Yahboom robot code
-            print("[BOT ACTION] Unlocking food compartment...")
-            time.sleep(2)
+        if known_encodings:
+            distances = face_recognition.face_distance(known_encodings, encoding)
+            min_distance = min(distances)
+            best_match_idx = distances.tolist().index(min_distance)
+            threshold = 0.5  # Lower is stricter, try 0.5-0.6
+            if min_distance < threshold:
+                name = known_names[best_match_idx]
+                print(f"[ACCESS GRANTED] Recognized: {name}")
+                # TODO: Replace this with Yahboom robot code
+                print("[BOT ACTION] Unlocking food compartment...")
+                time.sleep(2)
+            else:
+                name = "Unknown"
+                print("[ACCESS DENIED] Face not recognized.")
         else:
-            print("[ACCESS DENIED] Face not recognized.")
+            name = "Unknown"
+            print("[ACCESS DENIED] No known faces in database.")
 
         top, right, bottom, left = box
         cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
