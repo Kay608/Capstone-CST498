@@ -4,12 +4,15 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart';
 import 'package:mime/mime.dart';
+import 'package:http_parser/http_parser.dart'; // <-- keep this import
 
 void main() {
-  runApp(FaceUploadApp());
+  runApp(const FaceUploadApp());
 }
 
 class FaceUploadApp extends StatelessWidget {
+  const FaceUploadApp({super.key}); // use super parameter
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -18,17 +21,19 @@ class FaceUploadApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.deepPurple,
       ),
-      home: FaceUploadScreen(),
+      home: const FaceUploadScreen(),
     );
   }
 }
 
 class FaceUploadScreen extends StatefulWidget {
+  const FaceUploadScreen({super.key}); // use super parameter
+
   @override
-  _FaceUploadScreenState createState() => _FaceUploadScreenState();
+  FaceUploadScreenState createState() => FaceUploadScreenState();
 }
 
-class _FaceUploadScreenState extends State<FaceUploadScreen> {
+class FaceUploadScreenState extends State<FaceUploadScreen> { // Public class
   File? _image;
   final picker = ImagePicker();
   final TextEditingController _nameController = TextEditingController();
@@ -63,12 +68,12 @@ class _FaceUploadScreenState extends State<FaceUploadScreen> {
     var response = await request.send();
 
     if (response.statusCode == 200) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Image uploaded successfully!")),
+      ScaffoldMessenger.of(context as BuildContext).showSnackBar(
+        const SnackBar(content: Text("Image uploaded successfully!")), // const
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Upload failed.")),
+      ScaffoldMessenger.of(context as BuildContext).showSnackBar(
+        const SnackBar(content: Text("Upload failed.")), // const
       );
     }
   }
@@ -76,7 +81,7 @@ class _FaceUploadScreenState extends State<FaceUploadScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Face Registration")),
+      appBar: AppBar(title: const Text("Face Registration")), // const
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
@@ -84,24 +89,24 @@ class _FaceUploadScreenState extends State<FaceUploadScreen> {
           children: [
             _image != null
                 ? Image.file(_image!, height: 200)
-                : Text("No image selected."),
-            SizedBox(height: 20),
+                : const Text("No image selected."), // const
+            const SizedBox(height: 20), // const
             TextField(
               controller: _nameController,
-              decoration: InputDecoration(
+              decoration: const InputDecoration( // const
                 labelText: "Enter your name",
                 border: OutlineInputBorder(),
               ),
             ),
-            SizedBox(height: 20),
+            const SizedBox(height: 20), // const
             ElevatedButton(
               onPressed: _pickImage,
-              child: Text("Take Photo"),
+              child: const Text("Take Photo"), // const
             ),
-            SizedBox(height: 10),
+            const SizedBox(height: 10), // const
             ElevatedButton(
               onPressed: _uploadImage,
-              child: Text("Upload Photo"),
+              child: const Text("Upload Photo"), // const
             ),
           ],
         ),

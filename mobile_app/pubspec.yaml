@@ -25,6 +25,9 @@ dependencies:
   # 📁 For handling file paths
   path: ^1.8.3
 
+  # 📦 For parsing HTTP headers and multipart data
+  http_parser: ^4.0.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
