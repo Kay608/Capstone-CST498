@@ -1,0 +1,100 @@
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(SignInApp());
+}
+
+class SignInApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Sign In',
+      debugShowCheckedModeBanner: false,
+      home: SignInPage(),
+    );
+  }
+}
+
+class SignInPage extends StatefulWidget {
+  @override
+  _SignInPageState createState() => _SignInPageState();
+}
+
+class _SignInPageState extends State<SignInPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  void _signIn() {
+    if (_formKey.currentState!.validate()) {
+      // Normally, you'd check the username/password with a backend.
+      final username = _usernameController.text;
+      final password = _passwordController.text;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Signing in as $username')),
+      );
+    }
+  }
+
+  void _forgotPassword() {
+    // You could navigate to a "Reset Password" page here.
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Forgot password tapped')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Sign In')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TextFormField(
+                controller: _usernameController,
+                decoration: InputDecoration(
+                  labelText: 'Username',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) =>
+                    value!.isEmpty ? 'Please enter your username' : null,
+              ),
+              SizedBox(height: 16),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) =>
+                    value!.isEmpty ? 'Please enter your password' : null,
+              ),
+              SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _forgotPassword,
+                  child: Text('Forgot Password?'),
+                ),
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _signIn,
+                child: Text('Sign In'),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: Size.fromHeight(50),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
