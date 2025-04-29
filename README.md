@@ -47,6 +47,8 @@ Used to register users by capturing and uploading face images to the Flask API.
 
 ## 🚀 How to Run
 
+# Install Cmake from cmake.org and add it to system path
+
 ### Backend (Flask API)
 ```bash
 cd flask_api

@@ -147,6 +147,26 @@ def recognize_face():
 
     return jsonify({"recognized": recognized_names}), 200
 
+@app.route('/delete_face', methods=['DELETE'])
+@token_required
+def delete_face(current_user):
+    """Deletes all face images and encodings for the current user"""
+    # Delete user's images from uploads folder
+    deleted_files = 0
+    for filename in os.listdir(UPLOAD_FOLDER):
+        if filename.startswith(f"{current_user}_"):
+            file_path = os.path.join(UPLOAD_FOLDER, filename)
+            try:
+                os.remove(file_path)
+                deleted_files += 1
+            except Exception as e:
+                print(f"[ERROR] Could not delete {file_path}: {e}")
+    # Reload faces to update encodings.pkl
+    load_known_faces()
+    if deleted_files == 0:
+        return jsonify({"message": "No face data found for user."}), 404
+    return jsonify({"message": f"Deleted {deleted_files} face image(s) and encodings for user {current_user}."}), 200
+
 if __name__ == '__main__':
     load_known_faces()  # Load faces when the server starts
     app.run(host='0.0.0.0', port=5000)
