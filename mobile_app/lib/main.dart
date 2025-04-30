@@ -82,7 +82,11 @@ class FaceUploadScreenState extends State<FaceUploadScreen> {
   final String statusUrl = "http://192.168.1.100:5001/status";
 
   Future<void> _pickImage() async {
-    final pickedFile = await picker.pickImage(source: ImageSource.camera);
+    final pickedFile = await picker.pickImage(
+      source: Platform.isAndroid || Platform.isIOS
+          ? ImageSource.camera
+          : ImageSource.gallery,
+    );
 
     if (pickedFile != null) {
       setState(() {
