@@ -3,11 +3,14 @@ Unified Flask REST API for Yahboom Raspbot
 - Handles face registration, image upload, navigation goals, and status
 - Integrates with RobotController and face recognition
 """
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from flask import Flask, request, jsonify
 from robot_navigation.robot_controller import RobotController
 from threading import Thread
 import time
-import os
 
 app = Flask(__name__)
 controller = RobotController()
