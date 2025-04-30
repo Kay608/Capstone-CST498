@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
@@ -11,7 +12,7 @@ void main() {
 }
 
 class FaceUploadApp extends StatelessWidget {
-  const FaceUploadApp({super.key}); // use super parameter
+  const FaceUploadApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -21,81 +22,64 @@ class FaceUploadApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.deepPurple,
       ),
-      home: const FaceUploadScreen(),
+      home: const HomeScreen(),
+    );
+  }
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Delivery Bot App')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const FaceUploadScreen()),
+              ),
+              child: const Text('Face Registration'),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const TrackRobotScreen()),
+              ),
+              child: const Text('Track Robot'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 class FaceUploadScreen extends StatefulWidget {
-  const FaceUploadScreen({super.key}); // use super parameter
+  const FaceUploadScreen({super.key});
 
   @override
   FaceUploadScreenState createState() => FaceUploadScreenState();
 }
 
-class FaceUploadScreenState extends State<FaceUploadScreen> { // Public class
+class FaceUploadScreenState extends State<FaceUploadScreen> {
   File? _image;
   final picker = ImagePicker();
   final TextEditingController _nameController = TextEditingController();
 
-  // ⛓️ Replace with your Raspberry Pi’s IP
-  final String serverUrl = "http://192.168.1.100:5000/upload";
-  // Add your server's delete endpoint
-  final String deleteUrl = "http://192.168.1.100:5000/delete_face";
-
-  // For demo: store token in memory (replace with secure storage in production)
-  String? _token;
-
-  Future<void> _deleteFace() async {
-    if (_nameController.text.isEmpty) return;
-    // For demo: prompt for token if not set
-    if (_token == null) {
-      final token = await _promptForToken();
-      if (token == null) return;
-      setState(() { _token = token; });
-    }
-    var uri = Uri.parse(deleteUrl);
-    var response = await http.delete(
-      uri,
-      headers: { 'Authorization': 'Bearer "+_token!+"' },
-    );
-    if (response.statusCode == 200) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Face data deleted successfully!")),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Delete failed: ${response.body}")),
-      );
-    }
-  }
-
-  Future<String?> _promptForToken() async {
-    String? token;
-    await showDialog(
-      context: context,
-      builder: (context) {
-        final controller = TextEditingController();
-        return AlertDialog(
-          title: const Text('Enter your auth token'),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(labelText: 'Token'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                token = controller.text;
-                Navigator.of(context).pop();
-              },
-              child: const Text('OK'),
-            ),
-          ],
-        );
-      },
-    );
-    return token?.isNotEmpty == true ? token : null;
-  }
+  // Unified backend base URL
+  final String backendBaseUrl = "http://192.168.1.100:5001";
+  final String registerFaceUrl = "http://192.168.1.100:5001/register_face";
+  final String uploadImageUrl = "http://192.168.1.100:5001/upload_image";
+  final String deleteFaceUrl = "http://192.168.1.100:5001/delete_face";
+  // Navigation endpoints (for future use)
+  final String goalUrl = "http://192.168.1.100:5001/goal";
+  final String statusUrl = "http://192.168.1.100:5001/status";
 
   Future<void> _pickImage() async {
     final pickedFile = await picker.pickImage(source: ImageSource.camera);
@@ -110,7 +94,7 @@ class FaceUploadScreenState extends State<FaceUploadScreen> { // Public class
   Future<void> _uploadImage() async {
     if (_image == null || _nameController.text.isEmpty) return;
 
-    var uri = Uri.parse(serverUrl);
+    var uri = Uri.parse(registerFaceUrl); // Use new endpoint
     var request = http.MultipartRequest('POST', uri);
 
     request.fields['name'] = _nameController.text;
@@ -125,11 +109,30 @@ class FaceUploadScreenState extends State<FaceUploadScreen> { // Public class
 
     if (response.statusCode == 200) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Image uploaded successfully!")), // const
+        const SnackBar(content: Text("Image uploaded successfully!")),
       );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Upload failed.")), // const
+        const SnackBar(content: Text("Upload failed.")),
+      );
+    }
+  }
+
+  Future<void> _deleteFace() async {
+    if (_nameController.text.isEmpty) return;
+    var uri = Uri.parse(deleteFaceUrl);
+    var response = await http.delete(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: '{"name": "${_nameController.text}"}',
+    );
+    if (response.statusCode == 200) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Face data deleted successfully!")),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Delete failed: "+response.body)),
       );
     }
   }
@@ -137,7 +140,7 @@ class FaceUploadScreenState extends State<FaceUploadScreen> { // Public class
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Face Registration")), // const
+      appBar: AppBar(title: const Text("Face Registration")),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
@@ -145,24 +148,24 @@ class FaceUploadScreenState extends State<FaceUploadScreen> { // Public class
           children: [
             _image != null
                 ? Image.file(_image!, height: 200)
-                : const Text("No image selected."), // const
-            const SizedBox(height: 20), // const
+                : const Text("No image selected."),
+            const SizedBox(height: 20),
             TextField(
               controller: _nameController,
-              decoration: const InputDecoration( // const
+              decoration: const InputDecoration(
                 labelText: "Enter your name",
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 20), // const
+            const SizedBox(height: 20),
             ElevatedButton(
               onPressed: _pickImage,
-              child: const Text("Take Photo"), // const
+              child: const Text("Take Photo"),
             ),
-            const SizedBox(height: 10), // const
+            const SizedBox(height: 10),
             ElevatedButton(
               onPressed: _uploadImage,
-              child: const Text("Upload Photo"), // const
+              child: const Text("Upload Photo"),
             ),
             const SizedBox(height: 10),
             ElevatedButton(
@@ -170,6 +173,73 @@ class FaceUploadScreenState extends State<FaceUploadScreen> { // Public class
               style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
               child: const Text("Delete My Face"),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class TrackRobotScreen extends StatefulWidget {
+  const TrackRobotScreen({super.key});
+  @override
+  State<TrackRobotScreen> createState() => _TrackRobotScreenState();
+}
+
+class _TrackRobotScreenState extends State<TrackRobotScreen> {
+  final String statusUrl = "http://192.168.1.100:5001/status";
+  Map<String, dynamic>? robotStatus;
+  bool loading = false;
+
+  Future<void> fetchStatus() async {
+    setState(() { loading = true; });
+    try {
+      final response = await http.get(Uri.parse(statusUrl));
+      if (response.statusCode == 200) {
+        setState(() {
+          robotStatus = Map<String, dynamic>.from(
+            response.body.isNotEmpty ? (response.body.startsWith('{') ? jsonDecode(response.body) : {}) : {}
+          );
+        });
+      }
+    } catch (_) {}
+    setState(() { loading = false; });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    fetchStatus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Track Robot')),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ElevatedButton(
+              onPressed: fetchStatus,
+              child: const Text('Refresh Status'),
+            ),
+            const SizedBox(height: 20),
+            loading
+                ? const CircularProgressIndicator()
+                : robotStatus == null
+                    ? const Text('No status data.')
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('State: "+robotStatus!["state"].toString()'),
+                          Text('Last Goal: "+robotStatus!["last_goal"].toString()'),
+                          Text('Coords: "+robotStatus!["coords"].toString()'),
+                          Text('GPS: "+robotStatus!["gps"].toString()'),
+                          Text('Last Update: "+robotStatus!["last_update"].toString()'),
+                        ],
+                      ),
           ],
         ),
       ),

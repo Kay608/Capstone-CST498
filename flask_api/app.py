@@ -1,172 +1,140 @@
+"""
+Unified Flask REST API for Yahboom Raspbot
+- Handles face registration, image upload, navigation goals, and status
+- Integrates with RobotController and face recognition
+"""
 from flask import Flask, request, jsonify
+from robot_navigation.robot_controller import RobotController
+from threading import Thread
+import time
 import os
-import face_recognition
-import cv2
-import numpy as np
-import pickle
-from werkzeug.security import generate_password_hash, check_password_hash
-import jwt
-from functools import wraps
-from datetime import datetime, timedelta
-
-SECRET_KEY = 'your_secret_key_here'  # Change this in production!
-USERS_FILE = 'users.pkl'
 
 app = Flask(__name__)
+controller = RobotController()
 
-# Folder to save received images
-UPLOAD_FOLDER = "uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+status = {
+    'state': 'idle',  # idle, navigating, arrived, face_recognized, failed
+    'last_goal': None,
+    'last_update': time.time(),
+}
 
-known_encodings = []
-known_names = []
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), '../uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def save_users(users):
-    with open(USERS_FILE, 'wb') as f:
-        pickle.dump(users, f)
+orders = []
 
-def load_users():
-    if not os.path.exists(USERS_FILE):
-        return {}
-    with open(USERS_FILE, 'rb') as f:
-        return pickle.load(f)
+# --- Navigation Endpoints ---
+def navigation_thread(goal):
+    status['state'] = 'navigating'
+    status['last_goal'] = goal
+    status['last_update'] = time.time()
+    controller.run(goal)
+    if controller.arrived:
+        status['state'] = 'arrived'
+        status['last_update'] = time.time()
+        recognized = controller.perform_face_recognition()
+        if recognized:
+            status['state'] = 'face_recognized'
+        else:
+            status['state'] = 'failed'
+        status['last_update'] = time.time()
+    else:
+        status['state'] = 'failed'
+        status['last_update'] = time.time()
 
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = None
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-            if auth_header.startswith('Bearer '):
-                token = auth_header.split(' ')[1]
-        if not token:
-            return jsonify({'message': 'Token is missing!'}), 401
-        try:
-            data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            current_user = data['username']
-        except Exception as e:
-            return jsonify({'message': 'Token is invalid!'}), 401
-        return f(current_user, *args, **kwargs)
-    return decorated
-
-def load_known_faces():
-    """Load saved faces from the 'uploads' folder"""
-    global known_encodings, known_names
-    known_encodings = []
-    known_names = []
-
-    for filename in os.listdir(UPLOAD_FOLDER):
-        if filename.endswith(".jpg") or filename.endswith(".png"):
-            image_path = os.path.join(UPLOAD_FOLDER, filename)
-            image = face_recognition.load_image_file(image_path)
-            encodings = face_recognition.face_encodings(image)
-
-            if encodings:
-                # Extract user name from filename (before first underscore)
-                user = filename.split("_")[0]
-                for encoding in encodings:
-                    known_encodings.append(encoding)
-                    known_names.append(user)
-
-    # Save encodings to a file
-    with open("encodings.pkl", "wb") as f:
-        pickle.dump({
-            "encodings": known_encodings,
-            "names": known_names
-        }, f)
-    print("[INFO] encodings.pkl updated.")
-
-@app.route('/register', methods=['POST'])
-def register():
+@app.route('/goal', methods=['POST'])
+def set_goal():
     data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    if not username or not password:
-        return jsonify({'message': 'Username and password required'}), 400
-    users = load_users()
-    if username in users:
-        return jsonify({'message': 'User already exists'}), 400
-    users[username] = generate_password_hash(password)
-    save_users(users)
-    return jsonify({'message': 'User registered successfully'}), 201
+    goal = data.get('goal')  # Expecting [x, y] or [lat, lon]
+    if not goal or not isinstance(goal, list) or len(goal) != 2:
+        return jsonify({'error': 'Invalid goal format. Expected [x, y] or [lat, lon].'}), 400
+    Thread(target=navigation_thread, args=(tuple(goal),), daemon=True).start()
+    return jsonify({'status': 'Goal received', 'goal': goal})
 
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    users = load_users()
-    if username not in users or not check_password_hash(users[username], password):
-        return jsonify({'message': 'Invalid credentials'}), 401
-    token = jwt.encode({
-        'username': username,
-        'exp': datetime.utcnow() + timedelta(hours=12)
-    }, SECRET_KEY, algorithm="HS256")
-    return jsonify({'token': token}), 200
+@app.route('/status', methods=['GET'])
+def get_status():
+    # Add robot coordinates if available
+    coords = None
+    if hasattr(controller.localization.state, 'x') and hasattr(controller.localization.state, 'y'):
+        coords = {'x': controller.localization.state.x, 'y': controller.localization.state.y}
+    gps = controller.localization.get_gps()
+    return jsonify({
+        'state': status['state'],
+        'last_goal': status['last_goal'],
+        'last_update': status['last_update'],
+        'coords': coords,
+        'gps': gps,
+    })
 
-@app.route('/upload', methods=['POST'])
-@token_required
-def upload_image(current_user):
-    """Receives an image from the mobile app and saves it"""
-    if 'image' not in request.files:
-        return jsonify({"message": "No image found"}), 400
+@app.route('/orders', methods=['GET', 'POST'])
+def handle_orders():
+    if request.method == 'POST':
+        data = request.get_json()
+        if not data or 'user' not in data or 'restaurant' not in data or 'items' not in data:
+            return jsonify({'error': 'Missing order fields'}), 400
+        order = {
+            'user': data['user'],
+            'restaurant': data['restaurant'],
+            'items': data['items'],
+            'status': 'pending',
+            'timestamp': time.time(),
+        }
+        orders.append(order)
+        return jsonify({'status': 'Order received', 'order': order})
+    else:
+        return jsonify({'orders': orders})
 
-    file = request.files['image']
-    # Use username from token, not from form
-    name = current_user
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    filename = f"{name}_{timestamp}.jpg"
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
+# --- Face Registration & Image Upload Endpoints ---
+@app.route('/register_face', methods=['POST'])
+def register_face():
+    # Example: expects multipart/form-data with 'name' and 'image' fields
+    name = request.form.get('name')
+    image = request.files.get('image')
+    if not name or not image:
+        return jsonify({'error': 'Missing name or image'}), 400
+    save_path = os.path.join(UPLOAD_FOLDER, f"{name}.jpg")
+    image.save(save_path)
+    # TODO: Call your face registration logic here
+    return jsonify({'status': 'Face registered', 'name': name})
 
-    # Reload faces after adding a new one
-    load_known_faces()
-
-    return jsonify({"message": "Image received and trained"}), 200
-
-@app.route('/recognize', methods=['POST'])
-def recognize_face():
-    """Recognizes a face from an uploaded image"""
-    if 'image' not in request.files:
-        return jsonify({"message": "No image found"}), 400
-
-    file = request.files['image']
-    image = face_recognition.load_image_file(file)
-    face_locations = face_recognition.face_locations(image)
-    face_encodings = face_recognition.face_encodings(image, face_locations)
-
-    recognized_names = []
-    for encoding in face_encodings:
-        matches = face_recognition.compare_faces(known_encodings, encoding)
-        name = "Unknown"
-        if True in matches:
-            match_index = matches.index(True)
-            name = known_names[match_index]
-        recognized_names.append(name)
-
-    return jsonify({"recognized": recognized_names}), 200
+@app.route('/upload_image', methods=['POST'])
+def upload_image():
+    # Example: expects multipart/form-data with 'image' field
+    image = request.files.get('image')
+    if not image:
+        return jsonify({'error': 'No image provided'}), 400
+    save_path = os.path.join(UPLOAD_FOLDER, image.filename)
+    image.save(save_path)
+    return jsonify({'status': 'Image uploaded', 'filename': image.filename})
 
 @app.route('/delete_face', methods=['DELETE'])
-@token_required
-def delete_face(current_user):
-    """Deletes all face images and encodings for the current user"""
-    # Delete user's images from uploads folder
-    deleted_files = 0
-    for filename in os.listdir(UPLOAD_FOLDER):
-        if filename.startswith(f"{current_user}_"):
-            file_path = os.path.join(UPLOAD_FOLDER, filename)
-            try:
-                os.remove(file_path)
-                deleted_files += 1
-            except Exception as e:
-                print(f"[ERROR] Could not delete {file_path}: {e}")
-    # Reload faces to update encodings.pkl
-    load_known_faces()
-    if deleted_files == 0:
-        return jsonify({"message": "No face data found for user."}), 404
-    return jsonify({"message": f"Deleted {deleted_files} face image(s) and encodings for user {current_user}."}), 200
+def delete_face():
+    """
+    Delete a user's face data (image and encoding) by name.
+    Expects JSON: {"name": "username"}
+    """
+    data = request.get_json()
+    name = data.get('name') if data else None
+    if not name:
+        return jsonify({'error': 'Missing name'}), 400
+    # Remove image file
+    img_path = os.path.join(UPLOAD_FOLDER, f"{name}.jpg")
+    if os.path.exists(img_path):
+        os.remove(img_path)
+    # Remove encoding from encodings.pkl (if exists)
+    enc_path = os.path.join(os.path.dirname(__file__), 'encodings.pkl')
+    if os.path.exists(enc_path):
+        import pickle
+        with open(enc_path, 'rb') as f:
+            encodings = pickle.load(f)
+        if name in encodings:
+            del encodings[name]
+            with open(enc_path, 'wb') as f:
+                pickle.dump(encodings, f)
+            return jsonify({'status': 'Face data deleted', 'name': name})
+        else:
+            return jsonify({'status': 'Image deleted, no encoding found', 'name': name})
+    return jsonify({'status': 'Image deleted, encodings file not found', 'name': name})
 
 if __name__ == '__main__':
-    load_known_faces()  # Load faces when the server starts
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5001, debug=True)
