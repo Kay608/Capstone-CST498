@@ -96,17 +96,20 @@ def handle_orders():
 # --- Face Registration & Image Upload Endpoints ---
 @app.route('/register_face', methods=['POST'])
 def register_face():
-    # Example: expects multipart/form-data with 'name' and 'image' fields
     name = request.form.get('name')
     image = request.files.get('image')
     if not name or not image:
+        print('[DEBUG] Missing name or image in request')
         return jsonify({'error': 'Missing name or image'}), 400
     save_path = os.path.join(UPLOAD_FOLDER, f"{name}.jpg")
     image.save(save_path)
+    print(f'[DEBUG] Saved image to {save_path}')
     # --- Encode face and update encodings.pkl ---
     img = face_recognition.load_image_file(save_path)
     encodings = face_recognition.face_encodings(img)
+    print(f'[DEBUG] face_recognition.face_encodings returned {len(encodings)} encoding(s)')
     if not encodings:
+        print('[DEBUG] No face detected in image')
         return jsonify({'error': 'No face detected in image'}), 400
     encoding = encodings[0]
     # Load or create encodings.pkl in project root
@@ -122,6 +125,7 @@ def register_face():
     known_names.append(name)
     with open(ENCODINGS_PATH, 'wb') as f:
         pickle.dump({'encodings': known_encodings, 'names': known_names}, f)
+    print(f'[DEBUG] Added encoding for {name}. Total encodings: {len(known_encodings)}')
     return jsonify({'status': 'Face registered and encoded', 'name': name})
 
 @app.route('/upload_image', methods=['POST'])
