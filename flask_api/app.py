@@ -11,6 +11,10 @@ from flask import Flask, request, jsonify
 from robot_navigation.robot_controller import RobotController
 from threading import Thread
 import time
+from zeroconf import Zeroconf, ServiceInfo
+import socket
+import face_recognition
+import pickle
 
 app = Flask(__name__)
 controller = RobotController()
@@ -23,6 +27,8 @@ status = {
 
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), '../uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+ENCODINGS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'encodings.pkl'))
 
 orders = []
 
@@ -97,8 +103,26 @@ def register_face():
         return jsonify({'error': 'Missing name or image'}), 400
     save_path = os.path.join(UPLOAD_FOLDER, f"{name}.jpg")
     image.save(save_path)
-    # TODO: Call your face registration logic here
-    return jsonify({'status': 'Face registered', 'name': name})
+    # --- Encode face and update encodings.pkl ---
+    img = face_recognition.load_image_file(save_path)
+    encodings = face_recognition.face_encodings(img)
+    if not encodings:
+        return jsonify({'error': 'No face detected in image'}), 400
+    encoding = encodings[0]
+    # Load or create encodings.pkl in project root
+    if os.path.exists(ENCODINGS_PATH):
+        with open(ENCODINGS_PATH, 'rb') as f:
+            data = pickle.load(f)
+        known_encodings = data.get('encodings', [])
+        known_names = data.get('names', [])
+    else:
+        known_encodings = []
+        known_names = []
+    known_encodings.append(encoding)
+    known_names.append(name)
+    with open(ENCODINGS_PATH, 'wb') as f:
+        pickle.dump({'encodings': known_encodings, 'names': known_names}, f)
+    return jsonify({'status': 'Face registered and encoded', 'name': name})
 
 @app.route('/upload_image', methods=['POST'])
 def upload_image():
@@ -125,19 +149,34 @@ def delete_face():
     if os.path.exists(img_path):
         os.remove(img_path)
     # Remove encoding from encodings.pkl (if exists)
-    enc_path = os.path.join(os.path.dirname(__file__), 'encodings.pkl')
-    if os.path.exists(enc_path):
-        import pickle
-        with open(enc_path, 'rb') as f:
+    if os.path.exists(ENCODINGS_PATH):
+        with open(ENCODINGS_PATH, 'rb') as f:
             encodings = pickle.load(f)
         if name in encodings:
             del encodings[name]
-            with open(enc_path, 'wb') as f:
+            with open(ENCODINGS_PATH, 'wb') as f:
                 pickle.dump(encodings, f)
             return jsonify({'status': 'Face data deleted', 'name': name})
         else:
             return jsonify({'status': 'Image deleted, no encoding found', 'name': name})
     return jsonify({'status': 'Image deleted, encodings file not found', 'name': name})
 
+def register_mdns_service(port=5001):
+    zeroconf = Zeroconf()
+    ip = socket.gethostbyname(socket.gethostname())
+    desc = {'path': '/'}
+    info = ServiceInfo(
+        "_http._tcp.local.",
+        "appservice._http._tcp.local.",  # Changed service name
+        addresses=[socket.inet_aton(ip)], 
+        port=port,
+        properties=desc,
+        server="appservice.local.",
+    )
+    zeroconf.register_service(info)
+    print(f"[mDNS] Service registered as appservice.local:{port}")
+    return zeroconf
+
 if __name__ == '__main__':
+    mdns = register_mdns_service(port=5001)
     app.run(host='0.0.0.0', port=5001, debug=True)

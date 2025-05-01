@@ -6,3 +6,6 @@ flask-cors==3.0.10
 pickle-mixin==1.0.2
 Werkzeug==2.2.3
 pyjwt==2.10.1
+
+zeroconf>=0.39.0
+# For documentation: Flutter uses multicast_dns for mDNS discovery

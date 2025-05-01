@@ -19,6 +19,8 @@ dependencies:
   # 🌐 For sending HTTP requests
   http: ^0.13.6
 
+  multicast_dns: ^0.3.0
+
   # 🔍 For detecting file types (e.g., image/jpeg)
   mime: ^1.0.4
 
