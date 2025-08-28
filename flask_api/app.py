@@ -17,7 +17,8 @@ import face_recognition
 import pickle
 
 app = Flask(__name__)
-controller = RobotController()
+# Use simulation mode by default - change to False when deploying to real robot
+controller = RobotController(use_simulation=True)
 
 status = {
     'state': 'idle',  # idle, navigating, arrived, face_recognized, failed

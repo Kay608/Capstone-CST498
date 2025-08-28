@@ -6,13 +6,15 @@ Robot Controller for Yahboom Raspbot
 """
 from robot_navigation.localization import Localization
 from robot_navigation.pathfinding import PathFinder
+from robot_navigation.hardware_interface import create_hardware_interface
 import ai_facial_recognition
 import time
 
 class RobotController:
-    def __init__(self):
+    def __init__(self, use_simulation: bool = True):
         self.localization = Localization()
-        self.pathfinder = PathFinder(self.localization)
+        self.hardware = create_hardware_interface(use_simulation=use_simulation)
+        self.pathfinder = PathFinder(self.localization, self.hardware)
         self.goal = None
         self.arrived = False
 

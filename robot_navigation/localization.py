@@ -6,6 +6,7 @@ Localization module for Yahboom Raspbot
 """
 
 from typing import Optional, Tuple
+from math import sin, cos
 
 class RobotState:
     """
@@ -65,8 +66,7 @@ class Localization:
             return self.state.lat, self.state.lon
         return None
 
-# Helper imports for math
-from math import sin, cos
+# Math functions now imported at top of file
 
 # Example usage (for testing only)
 if __name__ == "__main__":
