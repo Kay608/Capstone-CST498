@@ -12,46 +12,60 @@ python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # Linux/Mac
 
-# Install dependencies
+# Install core dependencies
 pip install -r requirements.txt
+
+# Install Streamlit and requests for the web app
+pip install streamlit requests
+
+# Install Ultralytics for YOLO (if not already done)
+pip install ultralytics
 ```
 
-### 2. Test the System
+### 2. Run the System Components (Local Simulation)
+
+#### A. Start Flask API (Background Process)
 
 ```bash
-# Test hardware abstraction (simulation)
-python robot_navigation/hardware_interface.py
-
-# Test navigation system
-python robot_navigation/pathfinding.py
-
-# Test robot controller
-python robot_navigation/robot_controller.py
-
-# Start Flask API (simulation mode)
+# In a separate terminal tab/window (or run in background)
 python flask_api/app.py
 ```
 
-### 3. Mobile App Development
+#### B. Run Robot Controller (Simulated Navigation & Detection)
 
 ```bash
-cd mobile_app
-flutter pub get
-flutter run
+# This demonstrates the robot's logic in simulation
+python -m robot_navigation.robot_controller
 ```
+
+#### C. Run Streamlit Web App (Frontend Control)
+
+```bash
+# In a separate terminal tab/window
+streamlit run streamlit_app.py
+```
+
+### 3. Verify Local Integration
+
+*   Open the Streamlit app in your browser (`http://localhost:8501`).
+*   Use the "Face Registration" section to input a name and upload `uploads/Test_Person.jpg`.
+*   Use the "Robot Navigation & Control" section to set a goal.
+*   Click "Refresh Status Now" in the "Robot Status" section to see the robot's simulated state.
 
 ## Development Workflow
 
-### Current Status ✅
-- **Fixed**: Import issues in `localization.py`
-- **Added**: Hardware abstraction layer for development without robot
-- **Working**: Simulated robot with realistic physics
-- **Working**: Face registration and recognition API
-- **Working**: Mobile app with mDNS service discovery
+### Current Status ✅ (as of September 4, 2025)
+-   **Fixed**: Import issues in `localization.py` and `robot_controller.py`.
+-   **Added**: Hardware abstraction layer for development without the physical robot.
+-   **Working**: Simulated robot with realistic physics for navigation.
+-   **Working**: Basic YOLO object detection integrated into robot control (logging actions for `person`).
+-   **Working**: Face registration and recognition API.
+-   **Working**: Streamlit web app for user registration, robot control, and status monitoring.
+-   **Created**: `Research` folder for all project documentation (`YOLO_RESEARCH.md`, `STREAMLIT_RESEARCH.md`, `CLOUD_HOSTING_RESEARCH.md`).
 
 ### Simulation vs Real Hardware
 
-The system automatically uses simulation mode by default. To switch to real hardware:
+The system automatically uses simulation mode by default. To switch to real hardware (when the robot is available):
 
 ```python
 # In flask_api/app.py, change:
@@ -63,93 +77,87 @@ controller = RobotController(use_simulation=False)
 
 ## Testing Checklist
 
-### Navigation System
-- [ ] Robot can move forward/backward in simulation
-- [ ] Robot can turn left/right accurately
-- [ ] Pathfinding computes simple paths
-- [ ] Navigation follows computed paths
-- [ ] Localization tracks position via odometry
+### Core System (Simulated)
+- [x] Streamlit app communicates with Flask API.
+- [x] Face registration via Streamlit works and updates `encodings.pkl`.
+- [x] Robot controller runs simulated navigation (`python -m robot_navigation.robot_controller`).
+- [x] YOLO detection works on `uploads/Test_Person.jpg` in simulation.
+- [x] Robot controller logs actions based on YOLO detections (e.g., `[ROBOT ACTION] Detected PERSON. Robot would slow down and yield.`).
+
+### Navigation System (Simulated)
+- [x] Robot can move forward/backward in simulation.
+- [x] Robot can turn left/right accurately.
+- [x] Pathfinding computes simple paths.
+- [x] Navigation follows computed paths.
+- [x] Localization tracks position via odometry.
 
 ### Face Recognition
-- [ ] Face registration via mobile app works
-- [ ] Encodings are saved to `encodings.pkl`
-- [ ] Real-time recognition works via camera
-- [ ] API endpoints respond correctly
+- [ ] Real-time recognition works via camera (needs robot).
+- [x] API endpoints respond correctly for face registration.
 
-### Mobile App
-- [ ] Camera capture works
-- [ ] Image upload to Flask API works
-- [ ] mDNS service discovery finds robot
-- [ ] Robot status tracking displays correctly
+## Next Development Steps (Prioritized)
 
-## Next Development Steps
+### Immediate Priorities (Starting September 5, 2025)
+1.  **Cloud Hosting Implementation** ☁️
+    *   Choose a cloud provider (Heroku or Render recommended).
+    *   Prepare deployment files (`Procfile`, `runtime.txt`).
+    *   Deploy Flask API and Streamlit app.
+    *   Update `FLASK_API_BASE_URL` in `streamlit_app.py`.
 
-### September 2024 (Foundation)
-1. **Hardware Integration Research** 📋
-   - Install Yahboom Raspbot V2 driver library
-   - Test basic motor control with real hardware
-   - Integrate encoder and IMU sensors
+2.  **Hardware Integration & Initial Testing (Starting September 9, 2025 - after robot handover)** 🤖
+    *   Install Yahboom Raspbot V2 driver library on Raspberry Pi 5.
+    *   Implement basic motor control (move, turn, stop) in `hardware_interface.py`.
+    *   Test motor control with real hardware.
+    *   Integrate encoder and IMU sensors for localization.
 
-2. **YOLO Integration Planning** 🔍
-   - Research Ultralytics YOLO for sign detection
-   - Create training dataset for campus signs
-   - Plan integration with navigation system
+### Mid-Term Priorities
+3.  **YOLO Sign Detection Refinement** 👁️
+    *   Collect and annotate custom dataset of campus signs (Person.B's task).
+    *   Train custom YOLO model on campus signs.
+    *   Integrate custom YOLO model with robot's camera feed (using `_get_camera_frame`).
+    *   Implement advanced sign-based navigation rules in `robot_controller.py`.
 
-### October 2024 (Core Development)
-3. **Enhanced Navigation** 🚀
-   - Implement A* pathfinding algorithm
-   - Add obstacle avoidance
-   - GPS integration for outdoor navigation
+4.  **Enhanced Navigation** 🚀
+    *   Implement A* pathfinding algorithm (beyond straight line).
+    *   Add obstacle avoidance using sensor data.
+    *   GPS integration for outdoor navigation (if applicable with Yahboom hardware).
 
-4. **YOLO Sign Detection** 👁️
-   - Train model on campus signs
-   - Integrate with camera feed
-   - Add sign-based navigation rules
+### Final Polish & Demo Prep
+5.  **System Integration & Campus Testing** 🔧
+    *   End-to-end testing of the complete system on campus.
+    *   Performance optimization.
+    *   Robust error handling and recovery mechanisms.
 
-### November 2024 (Integration & Polish)
-5. **System Integration** 🔧
-   - End-to-end testing on campus
-   - Performance optimization
-   - Error handling and recovery
-
-6. **Demo Preparation** 🎬
-   - Create demo scenarios
-   - Video presentation recording
-   - Documentation finalization
+6.  **Video Presentation & Live Demo Prep** 🎬
+    *   Create compelling demo scenarios.
+    *   Record video presentation (Person.B's task).
+    *   Finalize documentation.
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Import Errors**
-   ```bash
-   # Make sure you're in the project root
-   cd /path/to/Capstone-CST498
-   python -c "from robot_navigation.localization import Localization; print('OK')"
-   ```
+1.  **`ModuleNotFoundError: No module named 'ultralytics'` or similar**
+    *   Ensure your virtual environment is activated: `.venv\Scripts\activate`.
+    *   Reinstall dependencies: `pip install -r requirements.txt` (and `pip install streamlit requests ultralytics` separately if needed).
+    *   Run Python scripts as modules from the project root (e.g., `python -m robot_navigation.robot_controller`).
 
-2. **Camera Access**
-   ```bash
-   # Test camera access
-   python -c "import cv2; print('Camera available:', cv2.VideoCapture(0).isOpened())"
-   ```
-
-3. **Flask API Not Found**
-   - Check mDNS service is running
-   - Try direct IP address instead of `appservice.local`
-   - Verify port 5001 is not blocked
+2.  **Flask API / Streamlit App Connection Errors**
+    *   Verify Flask API is running (`python flask_api/app.py`).
+    *   Check firewall settings if connecting from another device.
+    *   Ensure `FLASK_API_BASE_URL` in `streamlit_app.py` is correct (e.g., `http://localhost:5001` for local, or your cloud URL).
 
 ### Hardware-Specific Issues (When Available)
 
-1. **Yahboom Driver Not Found**
-   - Install driver library on Raspberry Pi
-   - Check GPIO permissions
-   - Verify I2C/SPI interfaces are enabled
+1.  **Yahboom Driver Not Found**
+    *   Install driver library on Raspberry Pi (refer to Yahboom documentation).
+    *   Check GPIO permissions.
+    *   Verify I2C/SPI interfaces are enabled.
 
-2. **Motor Control Not Working**
-   - Check power supply to motors
-   - Verify wiring connections
-   - Test individual motor commands
+2.  **Motor Control Not Working**
+    *   Check power supply to motors.
+    *   Verify wiring connections.
+    *   Test individual motor commands using the Yahboom driver.
 
 ## Team Collaboration
 
@@ -158,61 +166,40 @@ controller = RobotController(use_simulation=False)
 # Always pull before starting work
 git pull origin main
 
-# Create feature branches
-git checkout -b feature/yolo-integration
+# Create feature branches for new tasks
+git checkout -b feature/cloud-hosting
 git add .
-git commit -m "Add YOLO sign detection"
-git push origin feature/yolo-integration
+git commit -m "Implement cloud hosting for API and Streamlit"
+git push origin feature/cloud-hosting
 
-# Create pull request for review
+# Create pull request for review and merge
 ```
 
-### Task Division Suggestions
-- **Member 1**: Hardware integration, motor control, sensors
-- **Member 2**: YOLO implementation, computer vision, sign detection  
-- **Member 3**: Mobile app enhancements, API improvements, testing
+### Task Division (Current - as of September 4, 2025)
+-   **You (Backend/Integration)**: Flask API, Robot Navigation (Localization, Pathfinding), Hardware Integration, YOLO Implementation, Streamlit Web App, Cloud Hosting.
+-   **Person.K (UI/UX)**: Streamlit Web App UI/UX enhancements and design.
+-   **Person.B (Presentation/Data)**: YOLO Dataset Collection (campus signs), Final Video Presentation, Documentation.
 
 ### Regular Meetings
-- **Weekly progress reviews** (Mondays)
-- **Integration testing sessions** (Fridays)
-- **Hardware access coordination** (as needed)
-
-## Deployment (Real Robot)
-
-When ready to deploy to the Yahboom Raspbot:
-
-1. **Raspberry Pi Setup**
-   ```bash
-   # On the Pi
-   git clone <your-repo>
-   cd Capstone-CST498
-   pip install -r requirements.txt
-   
-   # Install Yahboom drivers
-   # (Follow Yahboom documentation)
-   ```
-
-2. **Configuration Changes**
-   ```python
-   # flask_api/app.py
-   controller = RobotController(use_simulation=False)
-   ```
-
-3. **Service Setup**
-   ```bash
-   # Create systemd service for auto-start
-   sudo systemctl enable capstone-robot.service
-   ```
+-   **Weekly progress reviews** (Mondays) - *Crucial for alignment, especially with the professor's feedback.* 
+-   **Integration testing sessions** (Fridays) - *Essential once hardware is available.*
+-   **Hardware access coordination** (as needed) - *Schedule time with the robot owner.*
 
 ## Resources
 
-- **Yahboom Raspbot Documentation**: [yahboom.net](https://www.yahboom.net)
-- **Ultralytics YOLO**: [docs.ultralytics.com](https://docs.ultralytics.com)
-- **OpenCV Python**: [opencv-python-tutroals.readthedocs.io](https://opencv-python-tutroals.readthedocs.io)
-- **Flutter Documentation**: [flutter.dev](https://flutter.dev)
+*   **Project Research (in `Research/` folder)**:
+    *   `Research/YOLO_RESEARCH.md`
+    *   `Research/STREAMLIT_RESEARCH.md`
+    *   `Research/CLOUD_HOSTING_RESEARCH.md`
+*   **Yahboom Raspbot Documentation**: [yahboom.net](https://www.yahboom.net)
+*   **Ultralytics YOLO**: [docs.ultralytics.com](https://docs.ultralytics.com)
+*   **OpenCV Python**: [opencv-python-tutroals.readthedocs.io](https://opencv-python-tutroals.readthedocs.io)
+*   **Streamlit Official Documentation**: [https://docs.streamlit.io/](https://docs.streamlit.io/)
+*   **Heroku Dev Center**: [https://devcenter.heroku.com/](https://devcenter.heroku.com/)
+*   **Render Documentation**: [https://render.com/docs](https://render.com/docs)
 
 ---
 
-**Last Updated**: August 28, 2024  
-**Project Due**: December 2, 2024  
-**Status**: Foundation Complete ✅
+**Last Updated**: September 4, 2025
+**Project Due**: December 2, 2025
+**Status**: Ready for Cloud Hosting & Hardware Integration 🚀
