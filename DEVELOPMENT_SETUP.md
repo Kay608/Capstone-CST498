@@ -15,11 +15,24 @@ python -m venv .venv
 # Install core dependencies
 pip install -r requirements.txt
 
-# Install Streamlit and requests for the web app
-pip install streamlit requests
-
 # Install Ultralytics for YOLO (if not already done)
 pip install ultralytics
+
+# --- AWS S3 Credentials (IMPORTANT!) ---
+# Set these environment variables in your terminal BEFORE running the Flask API or robot scripts.
+# For Heroku deployment, these will be set as Config Vars.
+# REPLACE [YOUR_...] with your actual AWS credentials and bucket name.
+$env:AWS_ACCESS_KEY_ID="[YOUR_AWS_ACCESS_KEY_ID]" # Windows PowerShell
+$env:AWS_SECRET_ACCESS_KEY="[YOUR_AWS_SECRET_ACCESS_KEY]" # Windows PowerShell
+$env:AWS_REGION="[YOUR_AWS_REGION]" # e.g., us-east-1
+$env:S3_BUCKET_NAME="[YOUR_S3_BUCKET_NAME]" # e.g., capstone-cst498-faces
+
+# For Linux/Mac (Bash/Zsh), use `export` instead:
+# export AWS_ACCESS_KEY_ID="[YOUR_AWS_ACCESS_KEY_ID]"
+# export AWS_SECRET_ACCESS_KEY="[YOUR_AWS_SECRET_ACCESS_KEY]"
+# export AWS_REGION="[YOUR_AWS_REGION]"
+# export S3_BUCKET_NAME="[YOUR_S3_BUCKET_NAME]"
+
 ```
 
 ### 2. Run the System Components (Local Simulation)
@@ -38,19 +51,21 @@ python flask_api/app.py
 python -m robot_navigation.robot_controller
 ```
 
-#### C. Run Streamlit Web App (Frontend Control)
+#### C. Serve HTML Frontend (Local Web Server)
 
 ```bash
-# In a separate terminal tab/window
-streamlit run streamlit_app.py
+# You'll need a simple local web server to serve your HTML/CSS/JS files.
+# If you have Python, you can use SimpleHTTPServer:
+python -m http.server 8000
+# Then open your browser to http://localhost:8000/index.html
 ```
 
 ### 3. Verify Local Integration
 
-*   Open the Streamlit app in your browser (`http://localhost:8501`).
-*   Use the "Face Registration" section to input a name and upload `uploads/Test_Person.jpg`.
-*   Use the "Robot Navigation & Control" section to set a goal.
-*   Click "Refresh Status Now" in the "Robot Status" section to see the robot's simulated state.
+*   Ensure Flask API is running in the background.
+*   Start a simple Python web server in your project root.
+*   Open `http://localhost:8000/index.html` (or your chosen port) in your browser.
+*   Use the HTML app to interact with the Flask API (face registration, robot control/status).
 
 ## Development Workflow
 
@@ -60,8 +75,9 @@ streamlit run streamlit_app.py
 -   **Working**: Simulated robot with realistic physics for navigation.
 -   **Working**: Basic YOLO object detection integrated into robot control (logging actions for `person`).
 -   **Working**: Face registration and recognition API.
--   **Working**: Streamlit web app for user registration, robot control, and status monitoring.
--   **Created**: `Research` folder for all project documentation (`YOLO_RESEARCH.md`, `STREAMLIT_RESEARCH.md`, `CLOUD_HOSTING_RESEARCH.md`).
+-   **Removed**: Streamlit web app and Flutter mobile app.
+-   **Prepared**: For HTML/CSS/JavaScript frontend development.
+-   **Created**: `Research` folder for all project documentation (`YOLO_RESEARCH.md`, `STREAMLIT_RESEARCH.md`, `CLOUD_HOSTING_RESEARCH.md`, `SIGN_LIST.md`).
 
 ### Simulation vs Real Hardware
 
@@ -98,37 +114,47 @@ controller = RobotController(use_simulation=False)
 ## Next Development Steps (Prioritized)
 
 ### Immediate Priorities (Starting September 5, 2025)
-1.  **Cloud Hosting Implementation** ☁️
-    *   Choose a cloud provider (Heroku or Render recommended).
-    *   Prepare deployment files (`Procfile`, `runtime.txt`).
-    *   Deploy Flask API and Streamlit app.
-    *   Update `FLASK_API_BASE_URL` in `streamlit_app.py`.
+1.  **Cloud Hosting for Flask API & Image Storage** ☁️
+    *   Choose a cloud object storage (e.g., AWS S3) for `encodings.pkl` and uploaded images.
+    *   Modify `flask_api/app.py` to upload images to S3 and manage `encodings.pkl` on S3.
+    *   Prepare Flask API for Heroku deployment (create `Procfile`, `runtime.txt`, update `requirements.txt`).
+    *   Deploy Flask API to Heroku.
 
-2.  **Hardware Integration & Initial Testing (Starting September 9, 2025 - after robot handover)** 🤖
-    *   Install Yahboom Raspbot V2 driver library on Raspberry Pi 5.
-    *   Implement basic motor control (move, turn, stop) in `hardware_interface.py`.
-    *   Test motor control with real hardware.
-    *   Integrate encoder and IMU sensors for localization.
+2.  **HTML Frontend Development** 💻
+    *   Create `index.html`, `style.css`, and `script.js` files.
+    *   Implement user registration form (face upload) with JavaScript `fetch()` calls to Flask API.
+    *   Implement robot control (goal setting) with JavaScript `fetch()` calls.
+    *   Implement robot status display with periodic JavaScript `fetch()` calls.
+    *   Update `FLASK_API_BASE_URL` in `script.js` to point to your cloud-hosted Flask API.
+
+3.  **Hardware & Connectivity (Starting September 9, 2025 - after robot handover)** 🤖
+    *   Flash Yahboom factory image on Raspberry Pi 5.
+    *   **Crucial:** Investigate Yahboom's existing APIs (Python libraries, HTTP endpoints, etc.) for:
+        *   High-level motor control (if exposed, e.g., move forward/backward a certain distance/time).
+        *   Camera access for facial recognition and YOLO.
+        *   Food compartment release mechanism.
+    *   Adapt `hardware_interface.py` to call these Yahboom APIs instead of raw motor commands.
+    *   Ensure the Raspberry Pi can access the cloud-hosted Flask API.
 
 ### Mid-Term Priorities
-3.  **YOLO Sign Detection Refinement** 👁️
-    *   Collect and annotate custom dataset of campus signs (Person.B's task).
+4.  **YOLO Sign Detection Refinement** 👁️
+    *   Collect and annotate custom dataset of campus signs (Person.B's task, guided by `Research/SIGN_LIST.md`).
     *   Train custom YOLO model on campus signs.
-    *   Integrate custom YOLO model with robot's camera feed (using `_get_camera_frame`).
-    *   Implement advanced sign-based navigation rules in `robot_controller.py`.
+    *   Integrate custom YOLO model with robot's camera feed (using `_get_camera_frame` which will now use the real Yahboom camera).
+    *   Implement advanced sign-based navigation rules in `robot_controller.py` (logging actions initially, then interfacing with Yahboom's high-level movement).
 
-4.  **Enhanced Navigation** 🚀
-    *   Implement A* pathfinding algorithm (beyond straight line).
+5.  **Autonomous Movement (Stretch Goal)** 🚀
+    *   Implement A* pathfinding algorithm (beyond simple point-to-point).
     *   Add obstacle avoidance using sensor data.
     *   GPS integration for outdoor navigation (if applicable with Yahboom hardware).
 
 ### Final Polish & Demo Prep
-5.  **System Integration & Campus Testing** 🔧
+6.  **System Integration & Campus Testing** 🔧
     *   End-to-end testing of the complete system on campus.
     *   Performance optimization.
     *   Robust error handling and recovery mechanisms.
 
-6.  **Video Presentation & Live Demo Prep** 🎬
+7.  **Video Presentation & Live Demo Prep** 🎬
     *   Create compelling demo scenarios.
     *   Record video presentation (Person.B's task).
     *   Finalize documentation.
@@ -139,25 +165,31 @@ controller = RobotController(use_simulation=False)
 
 1.  **`ModuleNotFoundError: No module named 'ultralytics'` or similar**
     *   Ensure your virtual environment is activated: `.venv\Scripts\activate`.
-    *   Reinstall dependencies: `pip install -r requirements.txt` (and `pip install streamlit requests ultralytics` separately if needed).
+    *   Reinstall dependencies: `pip install -r requirements.txt` and `pip install ultralytics` separately if needed.
     *   Run Python scripts as modules from the project root (e.g., `python -m robot_navigation.robot_controller`).
 
-2.  **Flask API / Streamlit App Connection Errors**
-    *   Verify Flask API is running (`python flask_api/app.py`).
-    *   Check firewall settings if connecting from another device.
-    *   Ensure `FLASK_API_BASE_URL` in `streamlit_app.py` is correct (e.g., `http://localhost:5001` for local, or your cloud URL).
+2.  **Flask API / Frontend Connection Errors**
+    *   Verify Flask API is running (locally: `python flask_api/app.py`; remotely: check Heroku logs).
+    *   Check firewall settings if connecting from another device/robot.
+    *   Ensure `FLASK_API_BASE_URL` in your HTML/JS frontend is correct (e.g., `http://localhost:5001` for local, or your cloud URL).
+
+3.  **Cloud Storage Access Issues (e.g., S3)**
+    *   Verify AWS credentials (access key, secret key, region) are correctly configured in Flask API.
+    *   Check S3 bucket policy and CORS settings.
+    *   Ensure correct bucket name and file paths.
 
 ### Hardware-Specific Issues (When Available)
 
-1.  **Yahboom Driver Not Found**
-    *   Install driver library on Raspberry Pi (refer to Yahboom documentation).
-    *   Check GPIO permissions.
-    *   Verify I2C/SPI interfaces are enabled.
+1.  **Yahboom API / Driver Not Found or Not Responding**
+    *   Ensure the Yahboom factory image is correctly flashed.
+    *   Refer to specific Yahboom documentation for Raspberry Pi 5 APIs.
+    *   Check if Python libraries are provided by Yahboom and installed on the Pi.
+    *   Verify network connectivity between Pi and cloud-hosted Flask API.
 
-2.  **Motor Control Not Working**
+2.  **Motor Control Not Working (via Yahboom API)**
     *   Check power supply to motors.
-    *   Verify wiring connections.
-    *   Test individual motor commands using the Yahboom driver.
+    *   Verify wiring connections (if you need to do any).
+    *   Test individual high-level commands through Yahboom's provided interface.
 
 ## Team Collaboration
 
@@ -167,21 +199,21 @@ controller = RobotController(use_simulation=False)
 git pull origin main
 
 # Create feature branches for new tasks
-git checkout -b feature/cloud-hosting
+git checkout -b feature/html-frontend-and-s3
 git add .
-git commit -m "Implement cloud hosting for API and Streamlit"
-git push origin feature/cloud-hosting
+git commit -m "Implement HTML frontend and S3 cloud storage"
+git push origin feature/html-frontend-and-s3
 
 # Create pull request for review and merge
 ```
 
 ### Task Division (Current - as of September 4, 2025)
--   **You (Backend/Integration)**: Flask API, Robot Navigation (Localization, Pathfinding), Hardware Integration, YOLO Implementation, Streamlit Web App, Cloud Hosting.
--   **Person.K (UI/UX)**: Streamlit Web App UI/UX enhancements and design.
--   **Person.B (Presentation/Data)**: YOLO Dataset Collection (campus signs), Final Video Presentation, Documentation.
+-   **You (Backend/Integration)**: Flask API, Robot Navigation (Localization, Pathfinding - adapting to Yahboom APIs), Hardware Integration (interfacing with Yahboom APIs), YOLO Implementation, HTML Web App (initial setup & backend integration), Cloud Hosting (Heroku, S3).
+-   **Person.K (UI/UX)**: HTML Web App UI/UX enhancements and design (working on `index.html`, `style.css`, `script.js`).
+-   **Person.B (Presentation/Data)**: YOLO Dataset Collection (campus signs, guided by `Research/SIGN_LIST.md`), Final Video Presentation, Documentation.
 
 ### Regular Meetings
--   **Weekly progress reviews** (Mondays) - *Crucial for alignment, especially with the professor's feedback.* 
+-   **Weekly progress reviews** (Mondays) - *Crucial for alignment, especially with the professor's feedback.*
 -   **Integration testing sessions** (Fridays) - *Essential once hardware is available.*
 -   **Hardware access coordination** (as needed) - *Schedule time with the robot owner.*
 
@@ -189,17 +221,19 @@ git push origin feature/cloud-hosting
 
 *   **Project Research (in `Research/` folder)**:
     *   `Research/YOLO_RESEARCH.md`
-    *   `Research/STREAMLIT_RESEARCH.md`
+    *   `Research/STREAMLIT_RESEARCH.md` (for historical context of prior plan)
     *   `Research/CLOUD_HOSTING_RESEARCH.md`
+    *   `Research/SIGN_LIST.md`
 *   **Yahboom Raspbot Documentation**: [yahboom.net](https://www.yahboom.net)
 *   **Ultralytics YOLO**: [docs.ultralytics.com](https://docs.ultralytics.com)
 *   **OpenCV Python**: [opencv-python-tutroals.readthedocs.io](https://opencv-python-tutroals.readthedocs.io)
-*   **Streamlit Official Documentation**: [https://docs.streamlit.io/](https://docs.streamlit.io/)
 *   **Heroku Dev Center**: [https://devcenter.heroku.com/](https://devcenter.heroku.com/)
 *   **Render Documentation**: [https://render.com/docs](https://render.com/docs)
+*   **AWS S3 Documentation**: [https://docs.aws.amazon.com/s3/index.html](https://docs.aws.amazon.com/s3/index.html)
+*   **MDN Web Docs (HTML, CSS, JavaScript)**: [https://developer.mozilla.org/en-US/docs/Web](https://developer.mozilla.org/en-US/docs/Web)
 
 ---
 
 **Last Updated**: September 4, 2025
 **Project Due**: December 2, 2025
-**Status**: Ready for Cloud Hosting & Hardware Integration
+**Status**: Ready for Cloud Hosting & HTML Frontend Development 🚀
