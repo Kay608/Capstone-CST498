@@ -3,19 +3,66 @@ import face_recognition
 import pickle
 import time
 import os
+import boto3 # New import for AWS S3
+from botocore.exceptions import NoCredentialsError, ClientError # For error handling
 
-ENCODINGS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), 'encodings.pkl'))
+# --- AWS S3 Configuration ---
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-2') # Default to us-east-2 if not set
+S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
 
-# Load known faces
+if not S3_BUCKET_NAME:
+    print("[WARNING] S3_BUCKET_NAME environment variable not set. S3 operations will fail.")
+    s3_client = None
+else:
+    try:
+        s3_client = boto3.client('s3', region_name=AWS_REGION)
+        print(f"[INFO] S3 client initialized for bucket: {S3_BUCKET_NAME} in region: {AWS_REGION}")
+    except NoCredentialsError:
+        print("[ERROR] AWS credentials not found. S3 operations will fail.")
+        s3_client = None
+    except Exception as e:
+        print(f"[ERROR] Error initializing S3 client: {e}")
+        s3_client = None
+
+ENCODINGS_FILE_KEY = 'encodings.pkl' # The name of your encodings file in S3
+
+def download_file_from_s3(file_key):
+    """
+    Downloads a file from S3.
+    """
+    if not s3_client:
+        return None, "S3 client not initialized."
+
+    try:
+        response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=file_key)
+        print(f"[INFO] Successfully downloaded {file_key} from S3.")
+        return response['Body'].read(), None
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'NoSuchKey':
+            print(f"[WARNING] {file_key} not found in S3 bucket.")
+            return None, "File not found."
+        print(f"[ERROR] S3 download failed for {file_key}: {e}")
+        return None, str(e)
+    except Exception as e:
+        print(f"[ERROR] Unexpected S3 download error for {file_key}: {e}")
+        return None, str(e)
+
+# Load known faces from S3
 try:
-    with open(ENCODINGS_PATH, "rb") as f:
-        data = pickle.load(f)
+    data_bytes, error = download_file_from_s3(ENCODINGS_FILE_KEY)
+    if data_bytes:
+        data = pickle.loads(data_bytes)
         known_encodings = data["encodings"]
         known_names = data["names"]
-    print(f"[INFO] Loaded {len(known_names)} known face(s).")
-except FileNotFoundError:
-    print("[ERROR] encodings.pkl not found. Please upload faces via the app first.")
-    exit()
+        print(f"[INFO] Loaded {len(known_names)} known face(s) from S3.")
+    else:
+        known_encodings = []
+        known_names = []
+        print("[WARNING] No encodings file found in S3 or S3 client not initialized. Starting with empty database.")
+except Exception as e:
+    print(f"[ERROR] Error loading encodings from S3: {e}. Starting with empty database.")
+    known_encodings = []
+    known_names = []
 
 def recognize_face():
     """

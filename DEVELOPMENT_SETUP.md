@@ -41,14 +41,14 @@ $env:S3_BUCKET_NAME="[YOUR_S3_BUCKET_NAME]" # e.g., capstone-cst498-faces
 
 ```bash
 # In a separate terminal tab/window (or run in background)
-python flask_api/app.py
+.venv\Scripts\python.exe flask_api/app.py
 ```
 
 #### B. Run Robot Controller (Simulated Navigation & Detection)
 
 ```bash
 # This demonstrates the robot's logic in simulation
-python -m robot_navigation.robot_controller
+.venv\Scripts\python.exe -m robot_navigation.robot_controller
 ```
 
 #### C. Serve HTML Frontend (Local Web Server)
