@@ -8,6 +8,15 @@ import time
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 import logging
+import cv2 # Import OpenCV
+
+# Import the Yahboom Raspbot driver
+try:
+    from raspbot.YB_Pcb_Car import YB_Pcb_Car
+except ImportError:
+    # Fallback for when not running on the Pi or raspbot is not in path
+    print("Warning: Could not import YB_Pcb_Car. Running in simulation mode or ensure raspbot directory is in PYTHONPATH.")
+    YB_Pcb_Car = None
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +61,16 @@ class HardwareInterface(ABC):
         pass
     
     @abstractmethod
+    def set_camera_servo(self, angle: int) -> None:
+        """Set camera servo angle (0-180 degrees)"""
+        pass
+    
+    @abstractmethod
+    def get_camera_frame(self) -> Optional[any]: # Returns an OpenCV image (numpy array)
+        """Capture a single frame from the robot's camera"""
+        pass
+    
+    @abstractmethod
     def is_available(self) -> bool:
         """Check if hardware is available and responsive"""
         pass
@@ -63,19 +82,25 @@ class YahboomRaspbotInterface(HardwareInterface):
         self.available = False
         self.last_encoder_left = 0
         self.last_encoder_right = 0
+        self.car = None
+        self.camera = None
         self._initialize_hardware()
     
     def _initialize_hardware(self):
         """Initialize connection to Yahboom Raspbot hardware"""
+        if YB_Pcb_Car is None:
+            logger.error("YB_Pcb_Car driver not imported. Hardware interface not available.")
+            self.available = False
+            return
         try:
-            # TODO: Import and initialize Yahboom driver library
-            # from yahboom_raspbot import RaspbotDriver
-            # self.robot = RaspbotDriver()
-            logger.warning("Yahboom driver not implemented yet - using simulation mode")
-            self.available = False
-        except ImportError as e:
-            logger.error(f"Yahboom driver not available: {e}")
-            self.available = False
+            self.car = YB_Pcb_Car()
+            # Initialize camera (assuming /dev/video0 or similar)
+            self.camera = cv2.VideoCapture(0) # 0 is typically the default camera
+            if not self.camera.isOpened():
+                raise IOError("Cannot open webcam")
+            
+            logger.info("Yahboom Raspbot hardware initialized successfully.")
+            self.available = True
         except Exception as e:
             logger.error(f"Hardware initialization failed: {e}")
             self.available = False
@@ -84,58 +109,86 @@ class YahboomRaspbotInterface(HardwareInterface):
         if not self.available:
             logger.warning("Hardware not available - command ignored")
             return
-        # TODO: Implement actual motor control
-        # self.robot.move_forward(speed)
-        # time.sleep(duration)
-        # self.robot.stop()
+        # YB_Pcb_Car.Car_Run uses speed1 and speed2, assuming equal speed for forward
+        # Speed values in YB_Pcb_Car are 0-255. Scaling our speed (0-1) to 0-255.
+        motor_speed = int(speed * 255)
+        self.car.Car_Run(motor_speed, motor_speed)
+        time.sleep(duration)
+        self.car.Car_Stop()
         logger.info(f"Moving forward at speed {speed} for {duration}s")
     
     def move_backward(self, speed: float, duration: float) -> None:
         if not self.available:
             logger.warning("Hardware not available - command ignored")
             return
-        # TODO: Implement actual motor control
+        motor_speed = int(speed * 255)
+        self.car.Car_Back(motor_speed, motor_speed)
+        time.sleep(duration)
+        self.car.Car_Stop()
         logger.info(f"Moving backward at speed {speed} for {duration}s")
     
     def turn_left(self, speed: float, angle: float) -> None:
         if not self.available:
             logger.warning("Hardware not available - command ignored")
             return
-        # TODO: Implement actual turning control
+        motor_speed = int(speed * 255)
+        # YB_Pcb_Car.Car_Left (0, speed1, 1, speed2) for differential drive
+        self.car.Car_Left(motor_speed, motor_speed) # Assuming this is a spot turn
+        # Duration for turn needs to be calibrated based on angle and speed
+        turn_duration = angle / 90.0 # Placeholder: 1 second per 90 degrees
+        time.sleep(turn_duration)
+        self.car.Car_Stop()
         logger.info(f"Turning left at speed {speed} for {angle} degrees")
     
     def turn_right(self, speed: float, angle: float) -> None:
         if not self.available:
             logger.warning("Hardware not available - command ignored")
             return
-        # TODO: Implement actual turning control
+        motor_speed = int(speed * 255)
+        # YB_Pcb_Car.Car_Right (1, speed1, 0, speed2) for differential drive
+        self.car.Car_Right(motor_speed, motor_speed) # Assuming this is a spot turn
+        turn_duration = angle / 90.0 # Placeholder
+        time.sleep(turn_duration)
+        self.car.Car_Stop()
         logger.info(f"Turning right at speed {speed} for {angle} degrees")
     
     def stop(self) -> None:
         if not self.available:
             return
-        # TODO: Implement actual stop command
+        self.car.Car_Stop()
         logger.info("Stopping robot")
     
     def get_encoder_ticks(self) -> Tuple[int, int]:
         if not self.available:
             return (0, 0)
-        # TODO: Get actual encoder values
-        # left_ticks = self.robot.get_left_encoder()
-        # right_ticks = self.robot.get_right_encoder()
-        # delta_left = left_ticks - self.last_encoder_left
-        # delta_right = right_ticks - self.last_encoder_right
-        # self.last_encoder_left = left_ticks
-        # self.last_encoder_right = right_ticks
-        # return (delta_left, delta_right)
+        # Encoders not directly found in YB_Pcb_Car.py
+        logger.warning("Encoder data not available for Yahboom Raspbot interface.")
         return (0, 0)
     
     def get_imu_data(self) -> Optional[dict]:
         if not self.available:
             return None
-        # TODO: Get actual IMU data
-        # return self.robot.get_imu_data()
+        # IMU data not directly found in YB_Pcb_Car.py
+        logger.warning("IMU data not available for Yahboom Raspbot interface.")
         return None
+        
+    def set_camera_servo(self, angle: int) -> None:
+        if not self.available:
+            logger.warning("Hardware not available - camera servo command ignored")
+            return
+        # Assuming servo ID 0 for the camera, and angle 0-180
+        self.car.Ctrl_Servo(0, angle)
+        logger.info(f"Setting camera servo to {angle} degrees")
+
+    def get_camera_frame(self) -> Optional[any]:
+        if not self.available or not self.camera.isOpened():
+            logger.warning("Camera not available - returning None")
+            return None
+        ret, frame = self.camera.read()
+        if not ret:
+            logger.error("Failed to grab frame from camera")
+            return None
+        return frame
     
     def is_available(self) -> bool:
         return self.available
@@ -153,7 +206,13 @@ class SimulatedRaspbotInterface(HardwareInterface):
         self.wheel_radius = 0.035  # meters
         self.ticks_per_revolution = 360  # encoder ticks per wheel revolution
         logger.info("Initialized simulated Raspbot interface")
+        self.simulated_camera_frame = self._generate_simulated_frame()
     
+    def _generate_simulated_frame(self):
+        # Create a blank black image for simulation
+        import numpy as np # Import numpy for array creation
+        return np.zeros((240, 320, 3), dtype=np.uint8)
+
     def move_forward(self, speed: float, duration: float) -> None:
         distance = speed * duration
         # Simulate encoder ticks
@@ -229,6 +288,12 @@ class SimulatedRaspbotInterface(HardwareInterface):
             'heading': math.degrees(self.theta)
         }
     
+    def set_camera_servo(self, angle: int) -> None:
+        logger.info(f"Simulated: Setting camera servo to {angle} degrees")
+    
+    def get_camera_frame(self) -> Optional[any]:
+        return self.simulated_camera_frame
+    
     def is_available(self) -> bool:
         return True
     
@@ -263,3 +328,21 @@ if __name__ == "__main__":
     
     print(f"Encoder ticks: {robot.get_encoder_ticks()}")
     print(f"IMU data: {robot.get_imu_data()}")
+    
+    # Test camera capture in simulation
+    frame = robot.get_camera_frame()
+    if frame is not None:
+        print(f"Simulated camera frame captured with shape: {frame.shape}")
+    
+    # Test real hardware interface (will likely fail if not on Pi)
+    print("\nTesting real robot interface (will likely show errors if not on Pi with drivers)...")
+    real_robot = create_hardware_interface(use_simulation=False)
+    if real_robot.is_available():
+        print("Real hardware interface is available.")
+        real_robot.move_forward(0.2, 1.0)
+        real_robot.stop()
+        frame = real_robot.get_camera_frame()
+        if frame is not None:
+            print(f"Real camera frame captured with shape: {frame.shape}")
+    else:
+        print("Real hardware interface is NOT available.")
