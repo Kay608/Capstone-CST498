@@ -207,10 +207,22 @@ git push origin feature/html-frontend-and-s3
 # Create pull request for review and merge
 ```
 
-### Task Division (Current - as of September 4, 2025)
+### Task Division (Current - as of September 23, 2025)
 -   **You (Backend/Integration)**: Flask API, Robot Navigation (Localization, Pathfinding - adapting to Yahboom APIs), Hardware Integration (interfacing with Yahboom APIs), YOLO Implementation, HTML Web App (initial setup & backend integration), Cloud Hosting (Heroku, S3).
--   **Person.K (UI/UX)**: HTML Web App UI/UX enhancements and design (working on `index.html`, `style.css`, `script.js`).
--   **Person.B (Presentation/Data)**: YOLO Dataset Collection (campus signs, guided by `Research/SIGN_LIST.md`), Final Video Presentation, Documentation.
+-   **Person.K (UI/UX)**: HTML Web App UI/UX enhancements and design (working on `index.html`, `style.css`, `script.js`), Researching JawsDB.
+-   **Person.B (Presentation/Data)**: YOLO Dataset Collection (campus signs, guided by `Research/SIGN_LIST.md`), Final Video Presentation, Poster Creation, Data Preprocessing and Visualization.
+-   **Person.M (Robot Development/Hardware)**: Yahboom Raspbot driver installation, VNC setup, initial hardware testing, assisting with robot connectivity.
+
+### Project Deliverables
+
+1.  **Poster Creation (Due October 17th, 2025)**
+    *   **Responsible**: Person.B
+    *   **Description**: Create a comprehensive project poster summarizing the robot's purpose, design, and key features.
+
+2.  **Data Preprocessing and Visualization (Due September 27th, 2025 - extended)**
+    *   **Responsible**: Person.B (with your guidance on data sources)
+    *   **Description**: Design Python code for data visualization using real data from the project. This involves generating plots (scatter, line, correlation matrix, etc.) and submitting code and screenshots.
+    *   **Action**: You need to identify what "real data" from our project can be used for this assignment. Consider robot sensor data (encoder ticks, IMU), timestamps of face recognition attempts (success/failure), sign detection counts, etc.
 
 ### Regular Meetings
 -   **Weekly progress reviews** (Mondays) - *Crucial for alignment, especially with the professor's feedback.*
