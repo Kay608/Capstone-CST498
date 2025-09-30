@@ -3,66 +3,60 @@ import face_recognition
 import pickle
 import time
 import os
-import boto3 # New import for AWS S3
-from botocore.exceptions import NoCredentialsError, ClientError # For error handling
+import pymysql # New import for MySQL
+import numpy as np # To deserialize bytea back to numpy array
 
-# --- AWS S3 Configuration ---
-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-2') # Default to us-east-2 if not set
-S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
+# --- JawsDB (PostgreSQL) Configuration ---
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
-if not S3_BUCKET_NAME:
-    print("[WARNING] S3_BUCKET_NAME environment variable not set. S3 operations will fail.")
-    s3_client = None
-else:
+if not DATABASE_URL:
+    print("[ERROR] DATABASE_URL environment variable not set. Database operations will fail.")
+
+def get_db_connection():
+    # Parse the DATABASE_URL
+    # Format: mysql://user:password@host:port/database_name
     try:
-        s3_client = boto3.client('s3', region_name=AWS_REGION)
-        print(f"[INFO] S3 client initialized for bucket: {S3_BUCKET_NAME} in region: {AWS_REGION}")
-    except NoCredentialsError:
-        print("[ERROR] AWS credentials not found. S3 operations will fail.")
-        s3_client = None
+        url = pymysql.connections.MySQLConnection.url_to_dict(DATABASE_URL)
+        conn = pymysql.connect(
+            host=url['host'],
+            port=url['port'],
+            user=url['user'],
+            password=url['password'],
+            database=url['database'],
+            cursorclass=pymysql.cursors.DictCursor # Return dictionaries
+        )
+        return conn
     except Exception as e:
-        print(f"[ERROR] Error initializing S3 client: {e}")
-        s3_client = None
+        print(f"[ERROR] Failed to connect to MySQL database: {e}")
+        raise
 
-ENCODINGS_FILE_KEY = 'encodings.pkl' # The name of your encodings file in S3
-
-def download_file_from_s3(file_key):
-    """
-    Downloads a file from S3.
-    """
-    if not s3_client:
-        return None, "S3 client not initialized."
-
-    try:
-        response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=file_key)
-        print(f"[INFO] Successfully downloaded {file_key} from S3.")
-        return response['Body'].read(), None
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'NoSuchKey':
-            print(f"[WARNING] {file_key} not found in S3 bucket.")
-            return None, "File not found."
-        print(f"[ERROR] S3 download failed for {file_key}: {e}")
-        return None, str(e)
-    except Exception as e:
-        print(f"[ERROR] Unexpected S3 download error for {file_key}: {e}")
-        return None, str(e)
-
-# Load known faces from S3
-try:
-    data_bytes, error = download_file_from_s3(ENCODINGS_FILE_KEY)
-    if data_bytes:
-        data = pickle.loads(data_bytes)
-        known_encodings = data["encodings"]
-        known_names = data["names"]
-        print(f"[INFO] Loaded {len(known_names)} known face(s) from S3.")
-    else:
-        known_encodings = []
-        known_names = []
-        print("[WARNING] No encodings file found in S3 or S3 client not initialized. Starting with empty database.")
-except Exception as e:
-    print(f"[ERROR] Error loading encodings from S3: {e}. Starting with empty database.")
+def load_encodings_from_db():
+    if not DATABASE_URL:
+        return [], []
+    conn = None
     known_encodings = []
     known_names = []
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT name, encoding FROM faces;")
+        rows = cur.fetchall()
+        for row in rows:
+            name = row['name']
+            encoding_bytes = row['encoding']
+            encoding = np.frombuffer(encoding_bytes, dtype=np.float64)
+            known_encodings.append(encoding)
+            known_names.append(name)
+        cur.close()
+        print(f"[INFO] Loaded {len(known_names)} known face(s) from MySQL.")
+    except Exception as e:
+        print(f"[ERROR] Error loading encodings from MySQL: {e}. Starting with empty database.")
+    finally:
+        if conn:
+            conn.close()
+    return known_encodings, known_names
+
+known_encodings, known_names = load_encodings_from_db()
 
 def recognize_face():
     """
