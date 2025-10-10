@@ -3,54 +3,54 @@ import face_recognition
 import pickle
 import time
 import os
-import pymysql # New import for MySQL
-import numpy as np # To deserialize bytea back to numpy array
+import pymysql  # For MySQL handling
+import numpy as np  # To deserialize BLOBs back to numpy arrays
 
-# --- JawsDB (PostgreSQL) Configuration ---
-DATABASE_URL = os.environ.get('DATABASE_URL')
-
-if not DATABASE_URL:
-    print("[ERROR] DATABASE_URL environment variable not set. Database operations will fail.")
+# --- JawsDB (MySQL) Configuration ---
+DB_HOST = os.environ.get('DB_HOST')
+DB_USER = os.environ.get('DB_USER')
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+DB_NAME = os.environ.get('DB_NAME')
 
 def get_db_connection():
-    # Parse the DATABASE_URL
-    # Format: mysql://user:password@host:port/database_name
+    """Return a new database connection for each call."""
     try:
-        url = pymysql.connections.MySQLConnection.url_to_dict(DATABASE_URL)
         conn = pymysql.connect(
-            host=url['host'],
-            port=url['port'],
-            user=url['user'],
-            password=url['password'],
-            database=url['database'],
-            cursorclass=pymysql.cursors.DictCursor # Return dictionaries
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=10
         )
         return conn
-    except Exception as e:
-        print(f"[ERROR] Failed to connect to MySQL database: {e}")
+    except pymysql.MySQLError as exc:
+        print(f"[ERROR] Failed to connect to MySQL database: {exc}")
         raise
 
 def load_encodings_from_db():
-    if not DATABASE_URL:
+    if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        print("[WARNING] Skipping load_encodings_from_db: database environment variables not fully set.")
         return [], []
     conn = None
     known_encodings = []
     known_names = []
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT name, encoding FROM faces;")
-        rows = cur.fetchall()
-        for row in rows:
-            name = row['name']
-            encoding_bytes = row['encoding']
-            encoding = np.frombuffer(encoding_bytes, dtype=np.float64)
-            known_encodings.append(encoding)
-            known_names.append(name)
-        cur.close()
+        with conn.cursor() as cur:
+            cur.execute("SELECT banner_id, first_name, last_name, encoding FROM users;")
+            rows = cur.fetchall()
+            for row in rows:
+                display_name = f"{row['first_name']} {row['last_name']}".strip()
+                banner_id = row['banner_id']
+                encoding_bytes = row['encoding']
+                encoding = np.frombuffer(encoding_bytes, dtype=np.float64)
+                known_encodings.append(encoding)
+                # Store both banner ID and display name for easier debugging
+                known_names.append((banner_id, display_name))
         print(f"[INFO] Loaded {len(known_names)} known face(s) from MySQL.")
-    except Exception as e:
-        print(f"[ERROR] Error loading encodings from MySQL: {e}. Starting with empty database.")
+    except pymysql.MySQLError as exc:
+        print(f"[ERROR] Error loading encodings from MySQL: {exc}. Starting with empty database.")
     finally:
         if conn:
             conn.close()
@@ -82,7 +82,8 @@ def recognize_face():
             best_match_idx = distances.tolist().index(min_distance)
             threshold = 0.65  # More lenient threshold
             if min_distance < threshold:
-                name = known_names[best_match_idx]
+                banner_id, display_name = known_names[best_match_idx]
+                name = display_name or banner_id
                 print(f"[ACCESS GRANTED] Recognized: {name}")
                 return name
             else:
@@ -117,7 +118,8 @@ if __name__ == "__main__":
                 best_match_idx = distances.tolist().index(min_distance)
                 threshold = 0.65  # More lenient threshold
                 if min_distance < threshold:
-                    name = known_names[best_match_idx]
+                    banner_id, display_name = known_names[best_match_idx]
+                    name = display_name or banner_id
                     print(f"[ACCESS GRANTED] Recognized: {name}")
                     print("[BOT ACTION] Unlocking food compartment...")
                     time.sleep(2)

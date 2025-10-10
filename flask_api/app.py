@@ -6,10 +6,9 @@ Unified Flask REST API for Yahboom Raspbot
 import sys
 import os
 from dotenv import load_dotenv
-import pickle
-import pymysql # New import for MySQL
-from io import BytesIO # New import for handling byte streams
-import numpy as np # To deserialize bytea back to numpy array
+import pymysql
+from io import BytesIO
+import numpy as np
 
 # Load environment variables from .env file
 load_dotenv()
@@ -29,135 +28,160 @@ app = Flask(__name__)
 controller = RobotController(use_simulation=True)
 
 # --- JawsDB (MySQL) Configuration ---
-DATABASE_URL = os.environ.get('JAWSDB_URL') # Use JAWSDB_URL for Heroku MySQL
-
-if not DATABASE_URL:
-    # Fallback for local testing if DATABASE_URL is explicitly set
-    DATABASE_URL = os.environ.get('DATABASE_URL') # Local testing DATABASE_URL might be different
-    if not DATABASE_URL:
-        print("[ERROR] DATABASE_URL or JAWSDB_URL environment variable not set. Database operations will fail.")
+DB_HOST = os.environ.get('DB_HOST')
+DB_USER = os.environ.get('DB_USER')
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+DB_NAME = os.environ.get('DB_NAME')
 
 def get_db_connection():
-    # Parse the DATABASE_URL
-    # Format: mysql://user:password@host:port/database_name
+    """Opens a new database connection."""
     try:
-        url = pymysql.connections.MySQLConnection.url_to_dict(DATABASE_URL)
         conn = pymysql.connect(
-            host=url['host'],
-            port=url['port'],
-            user=url['user'],
-            password=url['password'],
-            database=url['database'],
-            cursorclass=pymysql.cursors.DictCursor # Return dictionaries
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            cursorclass=pymysql.cursors.DictCursor, # Return dictionaries
+            connect_timeout=10
         )
         return conn
-    except Exception as e:
+    except pymysql.MySQLError as e:
         print(f"[ERROR] Failed to connect to MySQL database: {e}")
         raise
 
 def init_db():
-    if not DATABASE_URL:
-        print("[WARNING] Skipping DB initialization: DATABASE_URL not set.")
+    if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        print("[WARNING] Skipping DB initialization: Database environment variables not fully set.")
         return
     conn = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS faces (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL UNIQUE,
-                encoding BLOB NOT NULL
-            );
-        """)
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    banner_id VARCHAR(255) NOT NULL UNIQUE,
+                    first_name VARCHAR(255) NOT NULL,
+                    last_name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255) NOT NULL UNIQUE,
+                    encoding BLOB NOT NULL
+                );
+            """)
         conn.commit()
-        cur.close()
-        print("[INFO] Database initialized: 'faces' table ensured.")
-    except Exception as e:
+        print("[INFO] Database initialized: 'users' table ensured.")
+    except pymysql.MySQLError as e:
         print(f"[ERROR] Error initializing database: {e}")
     finally:
         if conn:
             conn.close()
 
+
 def load_encodings_from_db():
-    if not DATABASE_URL:
+    if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
         return [], []
+    
     conn = None
     known_encodings = []
     known_names = []
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT name, encoding FROM faces;")
-        rows = cur.fetchall()
-        for row in rows:
-            name = row['name']
-            encoding_bytes = row['encoding']
-            # Deserialize the BLOB back to a numpy array
-            encoding = np.frombuffer(encoding_bytes, dtype=np.float64) # Assuming float64 for face encodings
-            known_encodings.append(encoding)
-            known_names.append(name)
-        cur.close()
+        with conn.cursor() as cur:
+            cur.execute("SELECT banner_id, encoding FROM users;")
+            rows = cur.fetchall()
+            for row in rows:
+                # In this context, 'name' is the banner_id for identification
+                name = row['banner_id']
+                encoding_bytes = row['encoding']
+                # Deserialize the BLOB back to a numpy array
+                encoding = np.frombuffer(encoding_bytes, dtype=np.float64)
+                known_encodings.append(encoding)
+                known_names.append(name)
         print(f"[INFO] Loaded {len(known_names)} known face(s) from MySQL.")
-    except Exception as e:
+    except pymysql.MySQLError as e:
         print(f"[ERROR] Error loading encodings from MySQL: {e}. Starting with empty database.")
     finally:
         if conn:
             conn.close()
+    
     return known_encodings, known_names
 
-def save_encoding_to_db(name, encoding):
-    if not DATABASE_URL:
-        print("[WARNING] Skipping save: DATABASE_URL not set.")
+def save_user_to_db(banner_id, first_name, last_name, email, encoding):
+    if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        print("[WARNING] Skipping save: Database environment variables not set.")
         return False
+    
     conn = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        # Serialize the numpy array to bytes
-        encoding_bytes = encoding.tobytes()
+        with conn.cursor() as cur:
+            # Serialize the numpy array to bytes
+            encoding_bytes = encoding.tobytes()
 
-        # Check if name already exists, if so, update; otherwise insert
-        cur.execute("SELECT id FROM faces WHERE name = %s;", (name,))
-        if cur.fetchone():
-            cur.execute("UPDATE faces SET encoding = %s WHERE name = %s;", (encoding_bytes, name))
-            print(f"[INFO] Updated encoding for {name} in MySQL.")
-        else:
-            cur.execute("INSERT INTO faces (name, encoding) VALUES (%s, %s);", (name, encoding_bytes))
-            print(f"[INFO] Added encoding for {name} to MySQL.")
-        conn.commit()
-        cur.close()
+            # Check if banner_id already exists, if so, update; otherwise insert
+            cur.execute("SELECT id FROM users WHERE banner_id = %s;", (banner_id,))
+            if cur.fetchone():
+                cur.execute("""
+                    UPDATE users 
+                    SET first_name = %s, last_name = %s, email = %s, encoding = %s 
+                    WHERE banner_id = %s;
+                """, (first_name, last_name, email, encoding_bytes, banner_id))
+                print(f"[INFO] Updated user for {banner_id} in MySQL.")
+            else:
+                cur.execute("""
+                    INSERT INTO users (banner_id, first_name, last_name, email, encoding) 
+                    VALUES (%s, %s, %s, %s, %s);
+                """, (banner_id, first_name, last_name, email, encoding_bytes))
+                print(f"[INFO] Added user for {banner_id} to MySQL.")
+            conn.commit()
         return True
-    except Exception as e:
-        print(f"[ERROR] Error saving encoding to MySQL: {e}")
+    except pymysql.MySQLError as e:
+        print(f"[ERROR] Error saving user to MySQL: {e}")
         return False
     finally:
         if conn:
             conn.close()
 
-def delete_encoding_from_db(name):
-    if not DATABASE_URL:
-        print("[WARNING] Skipping deletion: DATABASE_URL not set.")
+
+def delete_user_from_db(banner_id):
+    if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        print("[WARNING] Skipping deletion: Database environment variables not set.")
         return False
+    
     conn = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM faces WHERE name = %s;", (name,))
-        conn.commit()
-        cur.close()
-        print(f"[INFO] Deleted encoding for {name} from MySQL.")
-        return True
-    except Exception as e:
-        print(f"[ERROR] Error deleting encoding from MySQL: {e}")
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE banner_id = %s;", (banner_id,))
+            conn.commit()
+            if cur.rowcount > 0:
+                print(f"[INFO] Deleted user for {banner_id} from MySQL.")
+                return True
+            else:
+                print(f"[INFO] No user found with banner_id {banner_id} to delete.")
+                return False
+    except pymysql.MySQLError as e:
+        print(f"[ERROR] Error deleting user from MySQL: {e}")
         return False
     finally:
         if conn:
             conn.close()
 
-init_db() # Initialize database on app startup
+# These will be loaded once before the first request
+known_encodings = []
+known_names = []
 
-known_encodings, known_names = load_encodings_from_db()
+@app.before_first_request
+def initialize_database_and_encodings():
+    """
+    Initialize the database and load face encodings once before the first request.
+    This avoids issues with the Flask reloader in debug mode.
+    """
+    global known_encodings, known_names
+    print("[INFO] Initializing database and loading encodings...")
+    init_db()
+    known_encodings, known_names = load_encodings_from_db()
+    print("[INFO] Initialization complete.")
+
 
 orders = []
 
@@ -225,31 +249,39 @@ def handle_orders():
 # --- Face Registration & Image Upload Endpoints ---
 @app.route('/register_face', methods=['POST'])
 def register_face():
-    name = request.form.get('name')
+    banner_id = request.form.get('banner_id')
+    first_name = request.form.get('first_name')
+    last_name = request.form.get('last_name')
+    email = request.form.get('email')
     image = request.files.get('image')
-    if not name or not image:
-        print('[DEBUG] Missing name or image in request')
-        return jsonify({'error': 'Missing name or image'}), 400
+
+    if not all([banner_id, first_name, last_name, email, image]):
+        missing_fields = [field for field in ['banner_id', 'first_name', 'last_name', 'email', 'image'] if not request.form.get(field) and not request.files.get(field)]
+        return jsonify({'error': f'Missing required fields: {", ".join(missing_fields)}'}), 400
     
     image_bytes = image.read()
     
     # --- Encode face ---
-    img = face_recognition.load_image_file(BytesIO(image_bytes)) # Use BytesIO for in-memory image
-    encodings = face_recognition.face_encodings(img)
-    print(f'[DEBUG] face_recognition.face_encodings returned {len(encodings)} encoding(s)')
-    if not encodings:
-        print('[DEBUG] No face detected in image')
-        return jsonify({'error': 'No face detected in image'}), 400
-    encoding = encodings[0]
+    try:
+        img = face_recognition.load_image_file(BytesIO(image_bytes))
+        encodings = face_recognition.face_encodings(img)
+        
+        if not encodings:
+            return jsonify({'error': 'No face detected in image'}), 400
+        
+        encoding = encodings[0]
+    except Exception as e:
+        return jsonify({'error': f'Failed to process image: {e}'}), 500
     
-    if not save_encoding_to_db(name, encoding):
-        return jsonify({'error': 'Failed to save encoding to database'}), 500
+    if not save_user_to_db(banner_id, first_name, last_name, email, encoding):
+        return jsonify({'error': 'Failed to save user to database'}), 500
 
     global known_encodings, known_names
-    known_encodings, known_names = load_encodings_from_db() # Reload from DB to ensure consistency
+    # Reload from DB to ensure consistency
+    known_encodings, known_names = load_encodings_from_db()
     
-    print(f'[DEBUG] Added encoding for {name}. Total encodings: {len(known_encodings)}')
-    return jsonify({'status': 'Face registered and encoded', 'name': name})
+    return jsonify({'status': 'User registered successfully', 'banner_id': banner_id})
+
 
 @app.route('/upload_image', methods=['POST'])
 def upload_image():
@@ -261,21 +293,22 @@ def upload_image():
 @app.route('/delete_face', methods=['DELETE'])
 def delete_face():
     """
-    Delete a user's face data (encoding) by name.
-    Expects JSON: {"name": "username"}
+    Delete a user's face data (encoding) by banner_id.
+    Expects JSON: {"banner_id": "B00123456"}
     """
     data = request.get_json()
-    name = data.get('name') if data else None
-    if not name:
-        return jsonify({'error': 'Missing name'}), 400
+    banner_id = data.get('banner_id') if data else None
+    if not banner_id:
+        return jsonify({'error': 'Missing banner_id'}), 400
 
-    if not delete_encoding_from_db(name):
-        return jsonify({'error': 'Failed to delete encoding from database'}), 500
+    if not delete_user_from_db(banner_id):
+        return jsonify({'error': 'Failed to delete user from database or user not found'}), 500
 
     global known_encodings, known_names
-    known_encodings, known_names = load_encodings_from_db() # Reload from DB to ensure consistency
+    # Reload from DB to ensure consistency
+    known_encodings, known_names = load_encodings_from_db()
     
-    return jsonify({'status': 'Face data deleted', 'name': name})
+    return jsonify({'status': 'User data deleted', 'banner_id': banner_id})
 
 def register_mdns_service(port=5001):
     zeroconf = Zeroconf()
@@ -296,4 +329,5 @@ def register_mdns_service(port=5001):
 if __name__ == '__main__':
     status = {'state': 'idle', 'last_goal': None, 'last_update': time.time()}
     mdns = register_mdns_service(port=5001)
+    # The initialization is now handled by the before_first_request hook
     app.run(host='0.0.0.0', port=5001, debug=True)
