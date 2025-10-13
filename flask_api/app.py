@@ -15,7 +15,7 @@ load_dotenv()
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from robot_navigation.robot_controller import RobotController
 from threading import Thread
 import time
@@ -26,6 +26,9 @@ import face_recognition
 app = Flask(__name__)
 # Use simulation mode by default - change to False when deploying to real robot
 controller = RobotController(use_simulation=True)
+
+# Track high-level robot state for status endpoint; initialized here so gunicorn workers inherit it
+status = {'state': 'idle', 'last_goal': None, 'last_update': time.time()}
 
 # --- JawsDB (MySQL) Configuration ---
 DB_HOST = os.environ.get('DB_HOST')
@@ -247,40 +250,81 @@ def handle_orders():
         return jsonify({'orders': orders})
 
 # --- Face Registration & Image Upload Endpoints ---
-@app.route('/register_face', methods=['POST'])
-def register_face():
-    banner_id = request.form.get('banner_id')
-    first_name = request.form.get('first_name')
-    last_name = request.form.get('last_name')
-    email = request.form.get('email')
-    image = request.files.get('image')
+def handle_face_registration(banner_id, first_name, last_name, email, image_file):
+    """Shared registration logic for API and HTML workflows."""
+    required_fields = {
+        'banner_id': banner_id,
+        'first_name': first_name,
+        'last_name': last_name,
+        'email': email,
+        'image': image_file,
+    }
+    missing_fields = [field for field, value in required_fields.items() if not value]
+    if missing_fields:
+        return False, f"Missing required fields: {', '.join(missing_fields)}", 400
 
-    if not all([banner_id, first_name, last_name, email, image]):
-        missing_fields = [field for field in ['banner_id', 'first_name', 'last_name', 'email', 'image'] if not request.form.get(field) and not request.files.get(field)]
-        return jsonify({'error': f'Missing required fields: {", ".join(missing_fields)}'}), 400
-    
-    image_bytes = image.read()
-    
-    # --- Encode face ---
     try:
+        image_bytes = image_file.read()
         img = face_recognition.load_image_file(BytesIO(image_bytes))
         encodings = face_recognition.face_encodings(img)
-        
         if not encodings:
-            return jsonify({'error': 'No face detected in image'}), 400
-        
+            return False, 'No face detected in image', 400
         encoding = encodings[0]
     except Exception as e:
-        return jsonify({'error': f'Failed to process image: {e}'}), 500
-    
+        return False, f'Failed to process image: {e}', 500
+
     if not save_user_to_db(banner_id, first_name, last_name, email, encoding):
-        return jsonify({'error': 'Failed to save user to database'}), 500
+        return False, 'Failed to save user to database', 500
 
     global known_encodings, known_names
-    # Reload from DB to ensure consistency
     known_encodings, known_names = load_encodings_from_db()
-    
-    return jsonify({'status': 'User registered successfully', 'banner_id': banner_id})
+
+    return True, {'banner_id': banner_id}, 200
+
+
+@app.route('/register_face', methods=['POST'])
+def register_face():
+    success, payload, status_code = handle_face_registration(
+        request.form.get('banner_id'),
+        request.form.get('first_name'),
+        request.form.get('last_name'),
+        request.form.get('email'),
+        request.files.get('image'),
+    )
+
+    if success:
+        return jsonify({'status': 'User registered successfully', 'banner_id': payload['banner_id']}), status_code
+
+    return jsonify({'error': payload}), status_code
+
+
+@app.route('/enroll', methods=['GET', 'POST'])
+def enroll():
+    if request.method == 'GET':
+        return render_template('enroll.html', result=None, form_data={})
+
+    form_data = {
+        'banner_id': request.form.get('banner_id', ''),
+        'first_name': request.form.get('first_name', ''),
+        'last_name': request.form.get('last_name', ''),
+        'email': request.form.get('email', ''),
+    }
+
+    success, payload, status_code = handle_face_registration(
+        form_data['banner_id'],
+        form_data['first_name'],
+        form_data['last_name'],
+        form_data['email'],
+        request.files.get('image'),
+    )
+
+    if success:
+        message = f"User {payload['banner_id']} registered successfully."
+        # Clear form fields on success
+        form_data = {key: '' for key in form_data}
+        return render_template('enroll.html', result={'success': True, 'message': message}, form_data=form_data), status_code
+
+    return render_template('enroll.html', result={'success': False, 'message': payload}, form_data=form_data), status_code
 
 
 @app.route('/upload_image', methods=['POST'])
@@ -327,7 +371,6 @@ def register_mdns_service(port=5001):
     return zeroconf
 
 if __name__ == '__main__':
-    status = {'state': 'idle', 'last_goal': None, 'last_update': time.time()}
     mdns = register_mdns_service(port=5001)
     # The initialization is now handled by the before_first_request hook
     app.run(host='0.0.0.0', port=5001, debug=True)
