@@ -23,9 +23,18 @@ from zeroconf import Zeroconf, ServiceInfo
 import socket
 import face_recognition
 
+
+def _is_truthy(value: str) -> bool:
+    """Interpret common truthy strings so env flags behave predictably."""
+    return str(value).strip().lower() in {'1', 'true', 't', 'yes', 'y', 'on'}
+
 app = Flask(__name__)
 # Use simulation mode by default - change to False when deploying to real robot
 controller = RobotController(use_simulation=True)
+
+# Respect FLASK_DEBUG when the app is executed directly
+_debug_env = os.environ.get('FLASK_DEBUG', '1')
+_run_debug_mode = _is_truthy(_debug_env)
 
 # Track high-level robot state for status endpoint; initialized here so gunicorn workers inherit it
 status = {'state': 'idle', 'last_goal': None, 'last_update': time.time()}
@@ -373,4 +382,4 @@ def register_mdns_service(port=5001):
 if __name__ == '__main__':
     mdns = register_mdns_service(port=5001)
     # The initialization is now handled by the before_first_request hook
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=_run_debug_mode)
