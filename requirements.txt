@@ -9,3 +9,4 @@ pyjwt==2.10.1
 gunicorn==22.0.0
 python-dotenv==1.0.1
 PyMySQL==1.1.0 # For MySQL (JawsDB) connection
+waitress==3.0.2 # For serving the Flask app in production. Start with python -m waitress --listen=0.0.0.0:5001 flask_api.app:app
