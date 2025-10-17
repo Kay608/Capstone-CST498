@@ -6,7 +6,7 @@ Senior capstone project for CST 498 at NC A&T State University. The goal is a co
 ## Current Architecture
 
 - **Flask API (`flask_api/app.py`)**: Central backend that exposes enrollment (`/enroll`, `/register_face`), navigation, and status endpoints. Face encodings are persisted in a MySQL table (`users`) hosted on JawsDB. When run locally, it defaults to simulated robot hardware.
-- **Robot stack (`robot_navigation/*`, `ai_facial_recognition.py`)**: Runs on the Yahboom Raspbot (Raspberry Pi). Uses OpenCV/face_recognition to match users and integrates with navigation/pathfinding modules.
+- **Robot stack (`robot_navigation/*`, `ai_facial_recognition.py`)**: Runs on the Yahboom Raspbot (Raspberry Pi). Uses OpenCV/face_recognition to match users, integrates with navigation/pathfinding modules, and now bundles Mary's MobileNetV2 traffic-sign classifier (`robot_navigation/sign_recognition`).
 - **Enrollment UI (`/flask_api/templates/enroll.html`)**: Simple HTML form rendered by Flask so teammates can upload images without CLI tooling.
 
 ## Key Files (top-level)
@@ -15,6 +15,7 @@ Senior capstone project for CST 498 at NC A&T State University. The goal is a co
 - `flask_api/templates/enroll.html` – Browser enrollment form.
 - `ai_facial_recognition.py` – Loads encodings from MySQL for live recognition on the robot.
 - `robot_navigation/` – Localization, pathfinding, and hardware abstractions.
+- `robot_navigation/sign_recognition/` – MobileNetV2 wrapper for traffic-sign inference (place `mobilenetv2.h5` under `model/`).
 - `requirements.txt` – Python dependencies (includes `gunicorn` for Heroku and `waitress` for Windows parity testing).
 - `Procfile` – Heroku entry point (`gunicorn flask_api.app:app --bind 0.0.0.0:$PORT`).
 - `DEVELOPMENT_SETUP.md` – Environment setup checklist.
@@ -40,6 +41,18 @@ Senior capstone project for CST 498 at NC A&T State University. The goal is a co
     python -m waitress --listen=0.0.0.0:5001 flask_api.app:app
     ```
     The Raspberry Pi/Heroku deployment will use Gunicorn automatically via the `Procfile`.
+
+### Traffic Sign Model Setup
+
+1. Obtain Mary's trained MobileNetV2 weights (`mobilenetv2.h5`).
+2. Place the file in `robot_navigation/sign_recognition/model/` or define `SIGN_MODEL_PATH` pointing to the file.
+3. Install the TensorFlow dependency (already listed in `requirements.txt`). On the Raspberry Pi you may prefer a TensorFlow Lite build—adjust instructions once hardware testing finishes.
+4. When `robot_navigation.robot_controller` runs, it will print detections such as STOP, SPEED LIMIT, NO ENTRY, or CROSSWALK and describe the planned robot action.
+5. Quick smoke test without the robot:
+    ```powershell
+    python -m robot_navigation.sign_recognition.run_classifier --image path\to\sample.jpg --show
+    ```
+    Use one of Mary's annotated images; the script prints the prediction and optionally displays the frame.
 
 ## Database Access (JawsDB / MySQL Workbench)
 

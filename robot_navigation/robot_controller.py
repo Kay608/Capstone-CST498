@@ -8,6 +8,10 @@ from robot_navigation.localization import Localization
 from robot_navigation.pathfinding import PathFinder
 from robot_navigation.hardware_interface import create_hardware_interface
 from robot_navigation.yolo_detector import YOLOSignDetector
+try:
+    from robot_navigation.sign_recognition import TrafficSignClassifier
+except Exception:  # Optional dependency (TensorFlow)
+    TrafficSignClassifier = None
 import ai_facial_recognition
 import time
 import cv2
@@ -19,6 +23,9 @@ class RobotController:
         self.hardware = create_hardware_interface(use_simulation=use_simulation)
         self.pathfinder = PathFinder(self.localization, self.hardware)
         self.yolo_detector = YOLOSignDetector() # Initialize YOLO detector
+        self.sign_classifier = TrafficSignClassifier() if TrafficSignClassifier else None
+        self._last_sign_label = None
+        self._last_sign_time = 0.0
         self.goal = None
         self.arrived = False
         self.simulated_camer_image = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads', 'Test_Person.jpg')) # Path to a sample image for simulated camera
@@ -118,8 +125,49 @@ class RobotController:
                         # self.hardware.set_speed(0.1) # Slow down
             else:
                 print("[INFO] No significant signs detected by YOLO.")
+
+            if self.sign_classifier:
+                self._evaluate_traffic_signs(frame)
+            else:
+                print("[WARN] Traffic sign classifier unavailable. Ensure TensorFlow is installed and mobilenetv2.h5 is present.")
         else:
             print("[ERROR] Could not get camera frame for YOLO detection.")
+
+    def _evaluate_traffic_signs(self, frame):
+        """Run MobileNet classifier and trigger high-level actions."""
+        try:
+            result = self.sign_classifier.predict_top(frame)
+        except Exception as exc:
+            print(f"[ERROR] Traffic sign classifier failed: {exc}")
+            return
+        if not result:
+            return
+
+        label = result['label']
+        confidence = result['confidence']
+
+        # Debounce identical detections within 5 seconds
+        now = time.time()
+        if label == self._last_sign_label and (now - self._last_sign_time) < 5:  # 5-second cooldown
+            return
+
+        self._last_sign_label = label
+        self._last_sign_time = now
+
+        print(f"[SIGN] Detected {label} with confidence {confidence:.2f}")
+        if label == 'stop':
+            print("[ROBOT ACTION] STOP sign detected via MobileNet. Robot would halt for 3 seconds.")
+            # self.hardware.stop()
+            # time.sleep(3)
+        elif label == 'speed_limit':
+            print("[ROBOT ACTION] SPEED LIMIT sign detected. Robot would reduce speed.")
+            # self.hardware.set_speed(0.2)
+        elif label == 'no_entry':
+            print("[ROBOT ACTION] NO ENTRY sign detected. Robot would plan an alternate route.")
+            # self.pathfinder.request_reroute()
+        elif label == 'crosswalk':
+            print("[ROBOT ACTION] CROSSWALK sign detected. Robot would slow and activate caution lights.")
+            # self.hardware.set_speed(0.15)
 
 # Example usage (for testing only)
 if __name__ == "__main__":
