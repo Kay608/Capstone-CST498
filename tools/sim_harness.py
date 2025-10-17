@@ -124,6 +124,16 @@ class HarnessApp:
         Button(self.root, text="Open Enrollment Page", width=30, command=open_enroll_page).pack(pady=8)
         Button(self.root, text="Run Sign Classifier", width=30, command=run_sign_classifier).pack(pady=8)
         Button(self.root, text="List Registered Users", width=30, command=show_users).pack(pady=8)
+        Button(
+            self.root,
+            text="Capture Face Snapshot",
+            width=30,
+            command=lambda: run_command_async([
+                sys.executable,
+                str(PROJECT_ROOT / "ai_facial_recognition.py"),
+                "--snapshot",
+            ], "Face Snapshot"),
+        ).pack(pady=8)
 
 
 if __name__ == "__main__":

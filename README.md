@@ -54,6 +54,17 @@ Senior capstone project for CST 498 at NC A&T State University. The goal is a co
     ```
     Use one of Mary's annotated images; the script prints the prediction and optionally displays the frame.
 
+### Simulation Command Library
+
+- Launch the Tkinter harness for common dev flows:
+    ```powershell
+    python tools\sim_harness.py
+    ```
+- Capture an annotated facial-recognition snapshot (helpful for poster assets). Omit `--output` if you just want the preview window:
+    ```powershell
+    python ai_facial_recognition.py --snapshot --output poster_assets\face_demo.png
+    ```
+
 ## Database Access (JawsDB / MySQL Workbench)
 
 ### GUI: MySQL Workbench

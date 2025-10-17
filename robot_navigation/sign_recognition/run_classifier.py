@@ -54,10 +54,17 @@ def main() -> int:
     print(f"Prediction: {label} ({confidence:.2f})")
 
     if args.show:
-        resized = classifier.preprocess(frame)
-        resized_bgr = cv2.cvtColor((resized * 255).astype("uint8"), cv2.COLOR_RGB2BGR)
-        cv2.putText(resized_bgr, f"{label} {confidence:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv2.imshow("Traffic Sign", resized_bgr)
+        display = frame.copy()
+        cv2.putText(display, f"{label} {confidence:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+        max_dim = 720
+        height, width = display.shape[:2]
+        scale = min(1.0, max_dim / max(height, width))
+        if scale < 1.0:
+            new_size = (int(width * scale), int(height * scale))
+            display = cv2.resize(display, new_size, interpolation=cv2.INTER_AREA)
+
+        cv2.imshow("Traffic Sign", display)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
