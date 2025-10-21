@@ -6,12 +6,15 @@ Unified Flask REST API for Yahboom Raspbot
 import sys
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 import pymysql
 from io import BytesIO
 import numpy as np
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file(s)
+BASE_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BASE_DIR / ".env", override=False)
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 

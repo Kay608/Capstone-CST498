@@ -12,3 +12,4 @@ PyMySQL==1.1.0 # For MySQL (JawsDB) connection
 waitress==3.0.2 # For serving the Flask app in production. Start with python -m waitress --listen=0.0.0.0:5001 flask_api.app:app
 tensorflow==2.13.0 # Required for MobileNetV2 traffic sign classifier (CPU build)
 typing-extensions==4.5.0 
+zeroconf==0.132.2
