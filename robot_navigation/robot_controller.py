@@ -28,22 +28,52 @@ class RobotController:
         self._last_sign_time = 0.0
         self.goal = None
         self.arrived = False
+        self._use_simulation = use_simulation
+        self._fallback_camera = None
         self.simulated_camer_image = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads', 'Test_Person.jpg')) # Path to a sample image for simulated camera
 
     def _get_camera_frame(self):
         """
         Simulates getting a camera frame. In a real robot, this would capture from the camera.
         """
-        if self.hardware.is_available():
-            # TODO: Implement real camera capture if hardware is available
-            pass
-        
-        # For simulation, load a static image
-        if os.path.exists(self.simulated_camer_image):
-            return cv2.imread(self.simulated_camer_image)
-        else:
-            print(f"[ERROR] Simulated camera image not found: {self.simulated_camer_image}")
-            return None
+        frame = None
+
+        # First preference: use hardware interface (real robot or simulated)
+        if self.hardware and self.hardware.is_available():
+            frame = self.hardware.get_camera_frame()
+
+        # Fallback to direct OpenCV capture when hardware interface is unavailable.
+        # Supports Pi Camera via V4L2/libcamera bridge or a user-supplied GStreamer pipeline.
+        if frame is None and not self._use_simulation:
+            if self._fallback_camera is None:
+                source = os.environ.get("CAPSTONE_CAMERA_PIPELINE")
+                if not source:
+                    # Prefer /dev/video0 when present; otherwise default to index 0
+                    default_device = "/dev/video0"
+                    source = default_device if os.path.exists(default_device) else 0
+
+                # Select backend based on source type
+                if isinstance(source, str) and not source.isdigit() and " " in source:
+                    # Treat as GStreamer pipeline string
+                    self._fallback_camera = cv2.VideoCapture(source, cv2.CAP_GSTREAMER)
+                elif isinstance(source, str) and source.startswith("/dev/video"):
+                    self._fallback_camera = cv2.VideoCapture(source, cv2.CAP_V4L2)
+                else:
+                    self._fallback_camera = cv2.VideoCapture(int(source), cv2.CAP_V4L2) if str(source).isdigit() else cv2.VideoCapture(source)
+
+            if self._fallback_camera and self._fallback_camera.isOpened():
+                ret, camera_frame = self._fallback_camera.read()
+                if ret:
+                    frame = camera_frame
+
+        # Last resort for simulation: load the demo image from disk
+        if frame is None and os.path.exists(self.simulated_camer_image):
+            frame = cv2.imread(self.simulated_camer_image)
+
+        if frame is None:
+            print("[ERROR] No camera frame available (hardware + fallbacks failed).")
+
+        return frame
 
     def receive_goal(self, goal):
         """
@@ -75,17 +105,24 @@ class RobotController:
         Uses the simulated camera frame if not in real hardware mode.
         """
         print("Scanning for face...")
-        # ai_facial_recognition.recognize_face() already handles camera capture,
-        # but in a real scenario, this might need to be adapted to use _get_camera_frame
-        # For now, we'll keep it as is, assuming ai_facial_recognition can get its own frame
-        # or can be modified to accept a frame.
-        recognized = ai_facial_recognition.recognize_face()  # Assumes this returns True/False
-        if recognized:
-            print("Face recognized!")
-            self.make_arrival_sound()
+        frame = self._get_camera_frame()
+        if frame is None:
+            print("[ERROR] Unable to capture frame for facial recognition.")
+            return False
+
+        results = ai_facial_recognition.analyze_frame(frame)
+        for result in results:
+            if result["matched"]:
+                print(f"Face recognized: {result['name']} ({result['confidence']:.2f})")
+                self.make_arrival_sound()
+                return True
+
+        if not results:
+            print("No faces detected in frame.")
         else:
             print("Face not recognized.")
-        return recognized
+
+        return False
 
     def make_arrival_sound(self):
         """
