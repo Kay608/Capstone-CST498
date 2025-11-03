@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Recognition Admin Panel</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .verification-log {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .verification-entry {
+            border-left: 4px solid #0d6efd;
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+        }
+        .verification-entry.success {
+            border-left-color: #198754;
+        }
+        .verification-entry.failure {
+            border-left-color: #dc3545;
+        }
+        .timestamp {
+            color: #6c757d;
+            font-size: 0.875rem;
+        }
+        .match-score {
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark bg-dark mb-4">
+        <div class="container">
+            <span class="navbar-brand mb-0 h1">Face Recognition Admin Panel</span>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Verification Log</h5>
+                        <button class="btn btn-sm btn-primary" onclick="refreshLog()">Refresh</button>
+                    </div>
+                    <div class="card-body verification-log" id="verificationLog">
+                        <!-- Verification entries will be inserted here -->
+                    </div>
+                </div>
+                
+                <div class="card mt-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Recent Orders</h5>
+                        <button class="btn btn-sm btn-primary" onclick="refreshOrders()">Refresh</button>
+                    </div>
+                    <div class="card-body verification-log" id="ordersList">
+                        <!-- Orders will be inserted here -->
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Statistics</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <h6>Today's Activity</h6>
+                            <p class="mb-1">Total Verifications: <span id="totalVerifications">0</span></p>
+                            <p class="mb-1">Successful Matches: <span id="successfulMatches">0</span></p>
+                            <p class="mb-1">Failed Matches: <span id="failedMatches">0</span></p>
+                        </div>
+                        <div>
+                            <h6>System Status</h6>
+                            <p class="mb-1">Last Update: <span id="lastUpdate">-</span></p>
+                            <p class="mb-1">Known Faces: <span id="knownFaces">0</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function refreshLog() {
+            fetch('/admin/verification_log')
+                .then(response => response.json())
+                .then(data => {
+                    updateVerificationLog(data.verifications);
+                    updateStatistics(data.statistics);
+                    // After updating verification, also refresh orders briefly so both panels stay in sync
+                    // but we don't block on it here (separate fetch implemented in refreshOrders)
+                })
+                .catch(error => console.error('Error fetching verification log:', error));
+        }
+
+        function refreshOrders() {
+            fetch('/admin/orders')
+                .then(response => response.json())
+                .then(data => updateOrders(data.orders))
+                .catch(error => console.error('Error fetching orders:', error));
+        }
+
+        function updateVerificationLog(verifications) {
+            const logContainer = document.getElementById('verificationLog');
+            logContainer.innerHTML = verifications.map(entry => `
+                <div class="verification-entry ${entry.matched ? 'success' : 'failure'}">
+                    <div class="d-flex justify-content-between">
+                        <strong>${entry.matched ? entry.name : 'Unknown Person'}</strong>
+                        <span class="timestamp">${entry.timestamp}</span>
+                    </div>
+                    <div>
+                        Match Score: <span class="match-score">${entry.confidence.toFixed(2)}</span>
+                        ${entry.location ? `<br>Location: ${entry.location}` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateStatistics(stats) {
+            document.getElementById('totalVerifications').textContent = stats.total;
+            document.getElementById('successfulMatches').textContent = stats.successful;
+            document.getElementById('failedMatches').textContent = stats.failed;
+            document.getElementById('lastUpdate').textContent = stats.lastUpdate;
+            document.getElementById('knownFaces').textContent = stats.knownFaces;
+        }
+
+        function updateOrders(orders) {
+            const list = document.getElementById('ordersList');
+            if (!orders || orders.length === 0) {
+                list.innerHTML = '<div class="text-muted">No recent orders</div>';
+                return;
+            }
+
+            list.innerHTML = orders.map(o => `
+                <div class="verification-entry ${o.status === 'pending' ? '' : (o.status === 'completed' ? 'success' : 'failure')}">
+                    <div class="d-flex justify-content-between">
+                        <strong>Order #${o.order_no ? o.order_no : '—'}</strong>
+                        <span class="timestamp">${o.timestamp}</span>
+                    </div>
+                    <div>
+                        <div>Banner ID: <strong>${o.banner_id}</strong>${o.name ? ` — ${o.name}` : ''}</div>
+                        <div>Item: <span class="match-score">${o.item}</span></div>
+                        <div>Status: ${o.status}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Initial load
+        refreshLog();
+        
+        // Initial orders load
+        refreshOrders();
+
+        // Auto-refresh every 30 seconds
+        setInterval(() => { refreshLog(); refreshOrders(); }, 30000);
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
