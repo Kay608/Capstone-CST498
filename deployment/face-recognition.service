@@ -1,0 +1,23 @@
+[Unit]
+Description=Food Delivery Robot Face Recognition Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/Capstone-CST498
+Environment="PATH=/home/pi/Capstone-CST498/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/pi/Capstone-CST498/.venv/bin/python ai_facial_recognition.py --headless --robot --model hog --offline
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

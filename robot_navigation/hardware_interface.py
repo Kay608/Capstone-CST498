@@ -78,12 +78,14 @@ class HardwareInterface(ABC):
 class YahboomRaspbotInterface(HardwareInterface):
     """Real hardware interface for Yahboom Raspbot"""
     
-    def __init__(self):
+    def __init__(self, use_picamera=True):
         self.available = False
         self.last_encoder_left = 0
         self.last_encoder_right = 0
         self.car = None
         self.camera = None
+        self.use_picamera = use_picamera
+        self.camera_type = None
         self._initialize_hardware()
     
     def _initialize_hardware(self):
@@ -94,10 +96,38 @@ class YahboomRaspbotInterface(HardwareInterface):
             return
         try:
             self.car = YB_Pcb_Car()
-            # Initialize camera (assuming /dev/video0 or similar)
-            self.camera = cv2.VideoCapture(0) # 0 is typically the default camera
-            if not self.camera.isOpened():
-                raise IOError("Cannot open webcam")
+            
+            # Try Pi Camera 2 first if requested (faster and better for Pi 5)
+            if self.use_picamera:
+                try:
+                    from picamera2 import Picamera2
+                    self.camera = Picamera2()
+                    config = self.camera.create_preview_configuration(
+                        main={"size": (640, 480), "format": "RGB888"}
+                    )
+                    self.camera.configure(config)
+                    self.camera.start()
+                    self.camera_type = 'picamera2'
+                    logger.info("Using Pi Camera 2 (picamera2)")
+                except ImportError:
+                    logger.warning("picamera2 not available, falling back to OpenCV")
+                    self.camera_type = 'opencv'
+                except Exception as e:
+                    logger.warning(f"Failed to initialize picamera2: {e}, falling back to OpenCV")
+                    self.camera_type = 'opencv'
+            else:
+                self.camera_type = 'opencv'
+            
+            # Fallback to USB camera or OpenCV VideoCapture
+            if self.camera_type == 'opencv':
+                self.camera = cv2.VideoCapture(0)
+                if not self.camera.isOpened():
+                    raise IOError("Cannot open camera")
+                # Optimize settings for Raspberry Pi
+                self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                self.camera.set(cv2.CAP_PROP_FPS, 15)
+                logger.info("Using USB/CSI camera via OpenCV")
             
             logger.info("Yahboom Raspbot hardware initialized successfully.")
             self.available = True
@@ -181,14 +211,28 @@ class YahboomRaspbotInterface(HardwareInterface):
         logger.info(f"Setting camera servo to {angle} degrees")
 
     def get_camera_frame(self) -> Optional[any]:
-        if not self.available or not self.camera.isOpened():
-            logger.warning("Camera not available - returning None")
+        if not self.available:
+            logger.warning("Hardware not available - returning None")
             return None
-        ret, frame = self.camera.read()
-        if not ret:
-            logger.error("Failed to grab frame from camera")
+            
+        try:
+            if self.camera_type == 'picamera2':
+                # Pi Camera 2 returns numpy array directly
+                frame = self.camera.capture_array()
+                return frame
+            else:
+                # OpenCV VideoCapture
+                if not self.camera.isOpened():
+                    logger.warning("Camera not available - returning None")
+                    return None
+                ret, frame = self.camera.read()
+                if not ret:
+                    logger.error("Failed to grab frame from camera")
+                    return None
+                return frame
+        except Exception as e:
+            logger.error(f"Failed to capture frame: {e}")
             return None
-        return frame
     
     def is_available(self) -> bool:
         return self.available
@@ -302,12 +346,18 @@ class SimulatedRaspbotInterface(HardwareInterface):
         import math
         return (self.x, self.y, math.degrees(self.theta))
 
-def create_hardware_interface(use_simulation: bool = True) -> HardwareInterface:
-    """Factory function to create appropriate hardware interface"""
+def create_hardware_interface(use_simulation: bool = True, use_picamera: bool = True) -> HardwareInterface:
+    """
+    Factory function to create appropriate hardware interface.
+    
+    Args:
+        use_simulation: If True, returns simulated interface for testing
+        use_picamera: If True, attempts to use Pi Camera 2 (faster on Pi 5)
+    """
     if use_simulation:
         return SimulatedRaspbotInterface()
     else:
-        return YahboomRaspbotInterface()
+        return YahboomRaspbotInterface(use_picamera=use_picamera)
 
 # Example usage and testing
 if __name__ == "__main__":

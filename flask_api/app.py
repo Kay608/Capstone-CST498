@@ -43,25 +43,51 @@ _run_debug_mode = _is_truthy(_debug_env)
 status = {'state': 'idle', 'last_goal': None, 'last_update': time.time()}
 
 # --- JawsDB (MySQL) Configuration ---
-DB_HOST = os.environ.get('DB_HOST')
-DB_USER = os.environ.get('DB_USER')
-DB_PASSWORD = os.environ.get('DB_PASSWORD')
-DB_NAME = os.environ.get('DB_NAME')
+# Hardcoded values for testing
+DB_HOST = 'd6vscs19jtah8iwb.cbetxkdyhwsb.us-east-1.rds.amazonaws.com'
+DB_USER = 'pibeadwopo2puu2w'
+DB_PASSWORD = 'ia58h6oid99au8x4'
+DB_NAME = 'cdzpl48ljf6v83hu'
+
+# Print debug information about database configuration
+print("\n[DEBUG] Database Configuration:")
+print(f"DB_HOST: {DB_HOST}")
+print(f"DB_USER: {DB_USER}")
+print(f"DB_NAME: {DB_NAME}")
+print(f"DB_PASSWORD is {'set' if DB_PASSWORD else 'not set'}\n")
 
 def get_db_connection():
     """Opens a new database connection."""
+    print("\n[DEBUG] Attempting JawsDB connection with:")
+    print(f"Host: {DB_HOST}")
+    print(f"User: {DB_USER}")
+    print(f"Database: {DB_NAME}")
+    print(f"Password length: {len(DB_PASSWORD) if DB_PASSWORD else 'No password set'}")
+    
     try:
         conn = pymysql.connect(
             host=DB_HOST,
             user=DB_USER,
             password=DB_PASSWORD,
             database=DB_NAME,
-            cursorclass=pymysql.cursors.DictCursor, # Return dictionaries
-            connect_timeout=10
+            cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=30,  # Increased timeout for remote connection
+            charset='utf8mb4',   # Proper charset for MySQL
+            ssl_verify_cert=False,  # JawsDB uses self-signed certificates
+            ssl_verify_identity=False,
+            ssl={'ca': None}  # Disable SSL certificate verification
         )
+        print("[DEBUG] JawsDB connection successful!")
         return conn
-    except pymysql.MySQLError as e:
-        print(f"[ERROR] Failed to connect to MySQL database: {e}")
+    except pymysql.Error as e:
+        error_code = getattr(e, 'args', [None])[0]
+        print(f"\n[ERROR] Database connection failed:")
+        print(f"Error Code: {error_code}")
+        print(f"Error Message: {str(e)}")
+        print("\n[DEBUG] Connection details that failed:")
+        print(f"Host: {DB_HOST}")
+        print(f"User: {DB_USER}")
+        print(f"Database: {DB_NAME}")
         raise
 
 def init_db():
@@ -80,6 +106,18 @@ def init_db():
                     last_name VARCHAR(255) NOT NULL,
                     email VARCHAR(255) NOT NULL UNIQUE,
                     encoding BLOB NOT NULL
+                );
+            """)
+            # Orders table: order_no autoincrement and banner_id reference
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    order_no INT AUTO_INCREMENT PRIMARY KEY,
+                    banner_id VARCHAR(255) NOT NULL,
+                    item VARCHAR(100) NOT NULL,
+                    restaurant VARCHAR(255),
+                    status VARCHAR(50) DEFAULT 'pending',
+                    ts DOUBLE NOT NULL,
+                    INDEX(banner_id)
                 );
             """)
         conn.commit()
@@ -121,40 +159,88 @@ def load_encodings_from_db():
     return known_encodings, known_names
 
 def save_user_to_db(banner_id, first_name, last_name, email, encoding):
+    print("\n[DEBUG] Starting save_user_to_db function")
+    print(f"[DEBUG] Received data for user {banner_id}")
+    
     if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
         print("[WARNING] Skipping save: Database environment variables not set.")
+        print(f"DB_HOST present: {bool(DB_HOST)}")
+        print(f"DB_USER present: {bool(DB_USER)}")
+        print(f"DB_PASSWORD present: {bool(DB_PASSWORD)}")
+        print(f"DB_NAME present: {bool(DB_NAME)}")
         return False
+    
+    print("[DEBUG] All database environment variables are present")
     
     conn = None
     try:
+        print("[DEBUG] Attempting to get database connection...")
         conn = get_db_connection()
+        print("[DEBUG] Successfully obtained database connection")
+        
+        print("[DEBUG] Converting face encoding to bytes (ensuring dtype=np.float64)...")
+        # Ensure a consistent dtype before saving so deserialization is predictable
+        try:
+            encoding = np.asarray(encoding, dtype=np.float64)
+        except Exception:
+            # Fallback: force conversion via float64 cast
+            encoding = np.array(encoding, dtype=np.float64)
+        encoding_bytes = encoding.tobytes()
+        print("[DEBUG] Successfully converted encoding to bytes (dtype enforced)")
+        
         with conn.cursor() as cur:
-            # Serialize the numpy array to bytes
-            encoding_bytes = encoding.tobytes()
-
-            # Check if banner_id already exists, if so, update; otherwise insert
+            print(f"[DEBUG] Checking if user {banner_id} already exists...")
             cur.execute("SELECT id FROM users WHERE banner_id = %s;", (banner_id,))
-            if cur.fetchone():
-                cur.execute("""
-                    UPDATE users 
-                    SET first_name = %s, last_name = %s, email = %s, encoding = %s 
-                    WHERE banner_id = %s;
-                """, (first_name, last_name, email, encoding_bytes, banner_id))
-                print(f"[INFO] Updated user for {banner_id} in MySQL.")
+            existing_user = cur.fetchone()
+            
+            if existing_user:
+                print(f"[DEBUG] Updating existing user {banner_id}")
+                try:
+                    cur.execute("""
+                        UPDATE users 
+                        SET first_name = %s, last_name = %s, email = %s, encoding = %s 
+                        WHERE banner_id = %s;
+                    """, (first_name, last_name, email, encoding_bytes, banner_id))
+                    print(f"[DEBUG] Update query executed successfully")
+                except Exception as e:
+                    print(f"[ERROR] Failed to update user: {str(e)}")
+                    raise
             else:
-                cur.execute("""
-                    INSERT INTO users (banner_id, first_name, last_name, email, encoding) 
-                    VALUES (%s, %s, %s, %s, %s);
-                """, (banner_id, first_name, last_name, email, encoding_bytes))
-                print(f"[INFO] Added user for {banner_id} to MySQL.")
+                print(f"[DEBUG] Inserting new user {banner_id}")
+                try:
+                    cur.execute("""
+                        INSERT INTO users (banner_id, first_name, last_name, email, encoding) 
+                        VALUES (%s, %s, %s, %s, %s);
+                    """, (banner_id, first_name, last_name, email, encoding_bytes))
+                    print(f"[DEBUG] Insert query executed successfully")
+                except Exception as e:
+                    print(f"[ERROR] Failed to insert user: {str(e)}")
+                    raise
+            
+            print("[DEBUG] Committing transaction...")
             conn.commit()
+            print("[DEBUG] Transaction committed successfully")
+            
+        print(f"[INFO] Successfully saved/updated user {banner_id} in database")
         return True
-    except pymysql.MySQLError as e:
-        print(f"[ERROR] Error saving user to MySQL: {e}")
+        
+    except pymysql.Error as e:
+        print(f"\n[ERROR] Database error while saving user:")
+        print(f"Error Code: {getattr(e, 'args', [None])[0]}")
+        print(f"Error Message: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"\n[ERROR] Unexpected error while saving user:")
+        print(f"Error Type: {type(e).__name__}")
+        print(f"Error Message: {str(e)}")
         return False
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+                print("[DEBUG] Database connection closed")
+            except Exception as e:
+                print(f"[ERROR] Error closing database connection: {str(e)}")
 
 
 def delete_user_from_db(banner_id):
@@ -264,6 +350,9 @@ def handle_orders():
 # --- Face Registration & Image Upload Endpoints ---
 def handle_face_registration(banner_id, first_name, last_name, email, image_file):
     """Shared registration logic for API and HTML workflows."""
+    print("\n[DEBUG] Starting face registration process")
+    print(f"[DEBUG] Received registration for banner_id: {banner_id}")
+    
     required_fields = {
         'banner_id': banner_id,
         'first_name': first_name,
@@ -271,25 +360,43 @@ def handle_face_registration(banner_id, first_name, last_name, email, image_file
         'email': email,
         'image': image_file,
     }
+    
+    print("[DEBUG] Checking required fields...")
     missing_fields = [field for field, value in required_fields.items() if not value]
     if missing_fields:
+        print(f"[ERROR] Missing fields: {', '.join(missing_fields)}")
         return False, f"Missing required fields: {', '.join(missing_fields)}", 400
 
     try:
+        print("[DEBUG] Processing image file...")
         image_bytes = image_file.read()
+        print("[DEBUG] Converting image to face_recognition format...")
         img = face_recognition.load_image_file(BytesIO(image_bytes))
+        print("[DEBUG] Detecting faces in image...")
         encodings = face_recognition.face_encodings(img)
+        
         if not encodings:
+            print("[ERROR] No face detected in uploaded image")
             return False, 'No face detected in image', 400
+            
+        print("[DEBUG] Face detected successfully")
         encoding = encodings[0]
+        print(f"[DEBUG] Encoding shape: {encoding.shape}")
+        
     except Exception as e:
+        print(f"[ERROR] Image processing failed: {str(e)}")
+        print(f"Error Type: {type(e).__name__}")
         return False, f'Failed to process image: {e}', 500
 
+    print("[DEBUG] Attempting to save user to database...")
     if not save_user_to_db(banner_id, first_name, last_name, email, encoding):
+        print("[ERROR] Database save operation failed")
         return False, 'Failed to save user to database', 500
 
+    print("[DEBUG] Reloading face encodings from database...")
     global known_encodings, known_names
     known_encodings, known_names = load_encodings_from_db()
+    print("[DEBUG] Face registration process completed successfully")
 
     return True, {'banner_id': banner_id}, 200
 
@@ -346,6 +453,84 @@ def upload_image():
     # with a new storage solution (e.g., local disk or another cloud service).
     return jsonify({'status': 'Image upload endpoint currently not active (S3 removed)'}), 200
 
+
+@app.route('/order', methods=['GET', 'POST'])
+def order_page():
+    """Simple order page that ties an order to a banner_id."""
+    form_data = {'banner_id': ''}
+    if request.method == 'GET':
+        return render_template('order.html', result=None, form_data=form_data)
+
+    # POST: place the order
+    banner_id = request.form.get('banner_id', '').strip()
+    item = request.form.get('item')
+    form_data['banner_id'] = banner_id
+
+    if not banner_id:
+        return render_template('order.html', result={'success': False, 'message': 'Missing banner_id.'}, form_data=form_data)
+    if not item:
+        return render_template('order.html', result={'success': False, 'message': 'Missing item selection.'}, form_data=form_data)
+
+    # Try to resolve human-readable name from the users table (optional)
+    user_display = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute('SELECT first_name, last_name FROM users WHERE banner_id = %s;', (banner_id,))
+            row = cur.fetchone()
+            if row:
+                user_display = f"{row.get('first_name','').strip()} {row.get('last_name','').strip()}".strip() or None
+    except Exception:
+        # If DB lookup fails, just continue and record the banner_id only
+        user_display = None
+    finally:
+        try:
+            if 'conn' in locals() and conn:
+                conn.close()
+        except Exception:
+            pass
+
+    order = {
+        'user': {'banner_id': banner_id, 'name': user_display},
+        'restaurant': 'Campus Pickup',
+        'items': [item],
+        'status': 'pending',
+        'timestamp': time.time(),
+    }
+    # Attempt to persist the order to the orders table in MySQL (preferred)
+    order_no = None
+    if all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO orders (banner_id, item, restaurant, status, ts) VALUES (%s, %s, %s, %s, %s)",
+                    (banner_id, item, 'Campus Pickup', 'pending', time.time()),
+                )
+                order_no = cur.lastrowid
+            conn.commit()
+            print(f"[INFO] Order persisted to DB with order_no={order_no}")
+        except Exception as e:
+            print(f"[ERROR] Failed to persist order to DB: {e}")
+        finally:
+            try:
+                if 'conn' in locals() and conn:
+                    conn.close()
+            except Exception:
+                pass
+
+    # Keep an in-memory record as well for quick access
+    order['order_no'] = order_no
+    orders.append(order)
+
+    message = f"Order received for {banner_id}: {item}."
+    if user_display:
+        message = f"Order received for {user_display} ({banner_id}): {item}."
+    if order_no:
+        message += f" (order_no: {order_no})"
+
+    return render_template('order.html', result={'success': True, 'message': message}, form_data={'banner_id': ''})
+
 @app.route('/delete_face', methods=['DELETE'])
 def delete_face():
     """
@@ -365,6 +550,100 @@ def delete_face():
     known_encodings, known_names = load_encodings_from_db()
     
     return jsonify({'status': 'User data deleted', 'banner_id': banner_id})
+
+# Store verification logs in memory (consider moving to database for production)
+verification_log = []
+
+@app.route('/admin')
+def admin_panel():
+    return render_template('admin.html')
+
+@app.route('/admin/verification_log')
+def get_verification_log():
+    # Get statistics for today
+    today = time.strftime('%Y-%m-%d')
+    today_verifications = [v for v in verification_log if v['timestamp'].startswith(today)]
+    successful_matches = sum(1 for v in today_verifications if v['matched'])
+    
+    statistics = {
+        'total': len(today_verifications),
+        'successful': successful_matches,
+        'failed': len(today_verifications) - successful_matches,
+        'lastUpdate': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'knownFaces': len(known_names)
+    }
+    
+    return jsonify({
+        'verifications': verification_log[-50:],  # Return last 50 entries
+        'statistics': statistics
+    })
+
+
+@app.route('/admin/orders', methods=['GET'])
+def get_admin_orders():
+    """Return recent orders from DB (preferred) or from in-memory list as fallback."""
+    recent = []
+    # Try DB first
+    if all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("SELECT order_no, banner_id, item, restaurant, status, ts FROM orders ORDER BY order_no DESC LIMIT 50;")
+                rows = cur.fetchall()
+                for r in rows:
+                    ts = r.get('ts')
+                    try:
+                        ts_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(float(ts))) if ts else ''
+                    except Exception:
+                        ts_str = str(ts)
+                    recent.append({
+                        'order_no': r.get('order_no'),
+                        'banner_id': r.get('banner_id'),
+                        'name': None,
+                        'item': r.get('item'),
+                        'restaurant': r.get('restaurant'),
+                        'status': r.get('status'),
+                        'timestamp': ts_str,
+                    })
+        except Exception as e:
+            print(f"[WARN] Failed to query orders table: {e}. Falling back to in-memory orders.")
+        finally:
+            try:
+                if 'conn' in locals() and conn:
+                    conn.close()
+            except Exception:
+                pass
+
+    # Fallback to in-memory orders if DB didn't produce results
+    if not recent:
+        for o in reversed(orders[-50:]):
+            ts = o.get('timestamp')
+            ts_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(float(ts))) if ts else ''
+            recent.append({
+                'order_no': o.get('order_no'),
+                'banner_id': o.get('user', {}).get('banner_id'),
+                'name': o.get('user', {}).get('name'),
+                'item': o.get('items')[0] if o.get('items') else None,
+                'restaurant': o.get('restaurant'),
+                'status': o.get('status'),
+                'timestamp': ts_str,
+            })
+
+    return jsonify({'orders': recent})
+
+def log_verification(name, matched, confidence, location=None):
+    """Log a face verification attempt."""
+    verification_entry = {
+        'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'name': name,
+        'matched': matched,
+        'confidence': confidence,
+        'location': location
+    }
+    verification_log.append(verification_entry)
+    # Keep only last 1000 entries
+    if len(verification_log) > 1000:
+        verification_log.pop(0)
 
 def register_mdns_service(port=5001):
     zeroconf = Zeroconf()
