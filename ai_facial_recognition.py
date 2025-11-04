@@ -7,6 +7,13 @@ import time
 import os
 import pymysql  # For MySQL handling
 import numpy as np  # To deserialize BLOBs back to numpy arrays
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Ensure .env files are loaded before reading DB configuration
+_ROOT_DIR = Path(__file__).resolve().parent
+load_dotenv(_ROOT_DIR / ".env", override=False)
+load_dotenv(_ROOT_DIR / "flask_api" / ".env", override=False)
 
 # Ensure .env is loaded for DB credentials
 from dotenv import load_dotenv

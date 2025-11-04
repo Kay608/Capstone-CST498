@@ -1,7 +1,11 @@
 import cv2
-from ultralytics import YOLO
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+try:
+    from ultralytics import YOLO
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    YOLO = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -11,12 +15,16 @@ class YOLOSignDetector:
         """
         Initializes the YOLO sign detector with a specified model.
         """
-        try:
-            self.model = YOLO(model_path)
-            logger.info(f"Successfully loaded YOLO model: {model_path}")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO model {model_path}: {e}")
-            raise
+        if YOLO is None:
+            logger.warning("Ultralytics YOLO not installed. Sign detection is disabled.")
+            self.model = None
+        else:
+            try:
+                self.model = YOLO(model_path)
+                logger.info(f"Successfully loaded YOLO model: {model_path}")
+            except Exception as e:
+                logger.error(f"Failed to load YOLO model {model_path}: {e}")
+                self.model = None
         
         # Define sign classes (adjust as you create custom dataset)
         self.sign_classes = {
@@ -110,6 +118,9 @@ class YOLOSignDetector:
         Returns:
             A list of dictionaries, each containing 'class', 'confidence', and 'bbox'.
         """
+        if self.model is None:
+            return []
+
         results = self.model(image, verbose=False) # verbose=False to suppress output
         return self.process_detections(results)
 
