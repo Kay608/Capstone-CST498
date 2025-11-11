@@ -51,6 +51,7 @@ FRAME_SKIP = 3  # Process every Nth frame for performance on Pi
 FACE_DETECTION_MODEL = 'hog'  # 'hog' is faster on CPU, 'cnn' is more accurate but needs GPU
 FRAME_SCALE = 0.5  # Downsample frames for faster processing
 DB_REFRESH_INTERVAL = 300  # Refresh encodings from DB every 5 minutes
+STATUS_LOG_INTERVAL = 5  # Seconds between "no activity" status logs
 
 # Global state
 robot_interface = None
@@ -508,6 +509,7 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
     last_refresh = time.time()
     last_recognition_time = 0
     recognition_cooldown = 3.0  # Seconds between recognitions
+    last_status_log = 0.0
     
     try:
         while True:
@@ -548,6 +550,7 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
                         callback('granted', result)
                     
                     last_recognition_time = current_time
+                    last_status_log = current_time
                     
                 elif not result["matched"] and len(known_encodings) > 0:
                     # Only log unrecognized if we have faces in DB
@@ -563,6 +566,10 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
             else:
                 # Small delay to prevent CPU overload in headless mode
                 time.sleep(0.05)
+
+            if not results and (current_time - last_status_log) > STATUS_LOG_INTERVAL:
+                print("[INFO] No face detected in frame.")
+                last_status_log = current_time
                 
     except KeyboardInterrupt:
         print("\n[INFO] Shutting down facial recognition...")
