@@ -57,6 +57,12 @@ robot_interface = None
 frame_count = 0
 
 
+def has_display() -> bool:
+    if sys.platform.startswith("linux"):
+        return bool(os.environ.get("DISPLAY"))
+    return True
+
+
 def configure_camera_stream(cam: cv2.VideoCapture) -> None:
     """Apply preferred capture settings; ignore failures silently."""
     if not cam:
@@ -147,8 +153,11 @@ class CameraSource:
                 frame = self._picam.capture_array()
                 if frame is None:
                     return False, None
-                if frame.ndim == 3 and frame.shape[2] == 4:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                if frame.ndim == 3:
+                    if frame.shape[2] == 4:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                    elif frame.shape[2] == 3:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 return True, frame
             except Exception as exc:  # noqa: BLE001
                 print(f"[ERROR] Picamera2 capture failed: {exc}")
@@ -587,9 +596,12 @@ def capture_snapshot(output_path: Optional[str] = None) -> None:
             status = "granted" if result["matched"] else "denied"
             print(f"[INFO] Access {status}: {result['name']} ({result['confidence']:.2f})")
 
-    cv2.imshow("Face Recognition Snapshot", annotated)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    if has_display():
+        cv2.imshow("Face Recognition Snapshot", annotated)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    else:
+        print("[INFO] Display not available; skipping preview window.")
 
     if output_path:
         saved = cv2.imwrite(output_path, annotated)
@@ -629,7 +641,12 @@ def main() -> None:
     
     print(f"[CONFIG] Detection model: {FACE_DETECTION_MODEL}")
     print(f"[CONFIG] Match threshold: {MATCH_THRESHOLD}")
-    print(f"[CONFIG] Headless mode: {args.headless}")
+    headless_mode = args.headless
+    if not headless_mode and not has_display():
+        print("[WARN] No graphical display detected; enabling headless mode.")
+        headless_mode = True
+
+    print(f"[CONFIG] Headless mode: {headless_mode}")
     print(f"[CONFIG] Robot integration: {args.robot}")
     print(f"[CONFIG] Offline mode: {args.offline}")
     
@@ -647,7 +664,7 @@ def main() -> None:
     if args.snapshot:
         capture_snapshot(args.output)
     else:
-        run_camera_loop(headless=args.headless, use_robot=args.robot)
+        run_camera_loop(headless=headless_mode, use_robot=args.robot)
 
 
 if __name__ == "__main__":
