@@ -6,7 +6,7 @@ __pycache__/
 *.pyd
 
 #Other
-cache/face_encodings.npz
+.cache/face_encodings.npz
 
 # Flutter
 build/

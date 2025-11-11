@@ -1,5 +1,6 @@
 import argparse
 from typing import Optional, Callable
+from contextlib import suppress
 import sys
 import cv2
 import face_recognition
@@ -23,6 +24,12 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env", override=False)
 load_dotenv(BASE_DIR / "flask_api" / ".env", override=False)
+try:
+    from picamera2 import Picamera2
+    PICAMERA_AVAILABLE = True
+except Exception:
+    Picamera2 = None  # type: ignore
+    PICAMERA_AVAILABLE = False
 
 # Import robot hardware interface
 try:
@@ -111,6 +118,58 @@ def open_local_camera() -> Optional[cv2.VideoCapture]:
 
     print("[ERROR] Unable to open camera using available backends.")
     return None
+
+
+class CameraSource:
+    def __init__(self) -> None:
+        self._picam = None
+        self._video = None
+
+    def start(self) -> bool:
+        if PICAMERA_AVAILABLE and sys.platform.startswith("linux"):
+            try:
+                self._picam = Picamera2()
+                config = self._picam.create_preview_configuration(main={"size": (640, 480), "format": "RGB888"})
+                self._picam.configure(config)
+                self._picam.start()
+                print("[INFO] Camera opened via Picamera2")
+                return True
+            except Exception as exc:  # noqa: BLE001
+                print(f"[WARN] Picamera2 unavailable: {exc}")
+                self._picam = None
+
+        self._video = open_local_camera()
+        return self._video is not None
+
+    def read(self) -> tuple[bool, Optional[np.ndarray]]:
+        if self._picam:
+            try:
+                frame = self._picam.capture_array()
+                if frame is None:
+                    return False, None
+                if frame.ndim == 3 and frame.shape[2] == 4:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                return True, frame
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ERROR] Picamera2 capture failed: {exc}")
+                return False, None
+
+        if self._video:
+            return self._video.read()
+
+        return False, None
+
+    def release(self) -> None:
+        if self._picam:
+            with suppress(Exception):
+                self._picam.stop()
+            with suppress(Exception):
+                self._picam.close()
+            self._picam = None
+        if self._video:
+            with suppress(Exception):
+                self._video.release()
+            self._video = None
 
 def get_db_connection():
     """Return a new database connection for each call."""
@@ -348,13 +407,12 @@ def recognize_face(location=None, use_robot_camera=False):
             print("[ERROR] Failed to get frame from robot camera.")
             return None
     else:
-        cam = open_local_camera()
-        if not cam:
+        camera = CameraSource()
+        if not camera.start():
             print("[ERROR] Camera not accessible.")
             return None
-        configure_camera_stream(cam)
-        ret, frame = cam.read()
-        cam.release()
+        ret, frame = camera.read()
+        camera.release()
         if not ret or frame is None:
             print("[ERROR] Failed to grab frame from camera.")
             return None
@@ -426,15 +484,14 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
             use_robot = False
     
     # Initialize camera
+    camera_source: Optional[CameraSource] = None
     if use_robot and robot_interface and robot_interface.is_available():
         print("[INFO] Using robot camera interface")
-        cam = None
     else:
-        cam = open_local_camera()
-        if not cam:
+        camera_source = CameraSource()
+        if not camera_source.start():
             print("[ERROR] Camera not accessible.")
             return
-        configure_camera_stream(cam)
     
     mode_str = "headless" if headless else "GUI"
     print(f"[INFO] Facial recognition active ({mode_str} mode). Press Ctrl+C to quit.")
@@ -459,7 +516,7 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
                     time.sleep(0.1)
                     continue
             else:
-                ret, frame = cam.read()
+                ret, frame = camera_source.read() if camera_source else (False, None)
                 if not ret or frame is None:
                     print("[ERROR] Failed to grab frame from camera.")
                     time.sleep(0.1)
@@ -501,8 +558,8 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
     except KeyboardInterrupt:
         print("\n[INFO] Shutting down facial recognition...")
     finally:
-        if cam:
-            cam.release()
+        if camera_source:
+            camera_source.release()
         if not headless:
             cv2.destroyAllWindows()
         if robot_interface:
@@ -510,14 +567,13 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
 
 
 def capture_snapshot(output_path: Optional[str] = None) -> None:
-    cam = open_local_camera()
-    if not cam:
+    camera = CameraSource()
+    if not camera.start():
         print("[ERROR] Camera not accessible.")
         return
-    configure_camera_stream(cam)
 
-    ret, frame = cam.read()
-    cam.release()
+    ret, frame = camera.read()
+    camera.release()
     if not ret or frame is None:
         print("[ERROR] Failed to grab frame from camera.")
         return
