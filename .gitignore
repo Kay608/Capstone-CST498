@@ -5,6 +5,9 @@ __pycache__/
 *.pyo
 *.pyd
 
+#Other
+.cache/
+
 # Flutter
 build/
 .dart_tool/
