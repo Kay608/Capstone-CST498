@@ -49,6 +49,69 @@ DB_REFRESH_INTERVAL = 300  # Refresh encodings from DB every 5 minutes
 robot_interface = None
 frame_count = 0
 
+
+def configure_camera_stream(cam: cv2.VideoCapture) -> None:
+    """Apply preferred capture settings; ignore failures silently."""
+    if not cam:
+        return
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cam.set(cv2.CAP_PROP_FPS, 15)
+    if sys.platform.startswith("linux"):
+        # Many Pi camera stacks prefer MJPG/YUYV when accessed via V4L2
+        for fourcc in ("MJPG", "YUYV"):
+            code = cv2.VideoWriter_fourcc(*fourcc)
+            if cam.set(cv2.CAP_PROP_FOURCC, code):
+                break
+
+
+def open_local_camera() -> Optional[cv2.VideoCapture]:
+    """Attempt to open a usable camera across common Pi/Linux backends."""
+    candidates = []
+    is_linux = sys.platform.startswith("linux")
+
+    if is_linux:
+        candidates.append((0, cv2.CAP_V4L2, "index=0 (CAP_V4L2)"))
+    candidates.append((0, cv2.CAP_ANY, "index=0 (default backend)"))
+
+    if is_linux:
+        for dev in ("/dev/video0", "/dev/video1", "/dev/video2"):
+            if Path(dev).exists():
+                candidates.append((dev, None, dev))
+
+    candidates.append((1, cv2.CAP_ANY, "index=1 (fallback)"))
+
+    for source, backend, label in candidates:
+        try:
+            if backend is None or isinstance(source, str):
+                cam = cv2.VideoCapture(source)
+            else:
+                cam = cv2.VideoCapture(source, backend)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] Exception opening camera via {label}: {exc}")
+            continue
+
+        if not cam or not cam.isOpened():
+            if cam:
+                cam.release()
+            continue
+
+        configure_camera_stream(cam)
+
+        # Probe a few frames to ensure this source actually delivers images
+        for _ in range(3):
+            ret, frame = cam.read()
+            if ret and frame is not None:
+                print(f"[INFO] Camera opened via {label}")
+                return cam
+            time.sleep(0.1)
+
+        print(f"[WARN] Camera via {label} opened but returned empty frames; trying fallback.")
+        cam.release()
+
+    print("[ERROR] Unable to open camera using available backends.")
+    return None
+
 def get_db_connection():
     """Return a new database connection for each call."""
     try:
@@ -285,10 +348,11 @@ def recognize_face(location=None, use_robot_camera=False):
             print("[ERROR] Failed to get frame from robot camera.")
             return None
     else:
-        cam = cv2.VideoCapture(0)
-        if not cam.isOpened():
+        cam = open_local_camera()
+        if not cam:
             print("[ERROR] Camera not accessible.")
             return None
+        configure_camera_stream(cam)
         ret, frame = cam.read()
         cam.release()
         if not ret or frame is None:
@@ -366,14 +430,11 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
         print("[INFO] Using robot camera interface")
         cam = None
     else:
-        cam = cv2.VideoCapture(0)
-        if not cam.isOpened():
+        cam = open_local_camera()
+        if not cam:
             print("[ERROR] Camera not accessible.")
             return
-        # Optimize camera settings for Pi
-        cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cam.set(cv2.CAP_PROP_FPS, 15)
+        configure_camera_stream(cam)
     
     mode_str = "headless" if headless else "GUI"
     print(f"[INFO] Facial recognition active ({mode_str} mode). Press Ctrl+C to quit.")
@@ -449,10 +510,11 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
 
 
 def capture_snapshot(output_path: Optional[str] = None) -> None:
-    cam = cv2.VideoCapture(0)
-    if not cam.isOpened():
+    cam = open_local_camera()
+    if not cam:
         print("[ERROR] Camera not accessible.")
         return
+    configure_camera_stream(cam)
 
     ret, frame = cam.read()
     cam.release()
