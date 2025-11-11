@@ -243,6 +243,38 @@ def save_user_to_db(banner_id, first_name, last_name, email, encoding):
                 print(f"[ERROR] Error closing database connection: {str(e)}")
 
 
+def save_order_to_db(banner_id: str, item: str, restaurant: str, status: str = 'pending'):
+    """Persist an order row to MySQL and return the new order number."""
+    if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+        print("[WARNING] Skipping order persistence: database credentials missing.")
+        return None, 'Database is not configured.'
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO orders (banner_id, item, restaurant, status, ts)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (banner_id, item, restaurant, status, time.time()),
+            )
+            order_no = cur.lastrowid
+        conn.commit()
+        print(f"[INFO] Saved order {order_no} for {banner_id} to database.")
+        return order_no, None
+    except pymysql.MySQLError as exc:
+        print(f"[ERROR] Failed to save order to database: {exc}")
+        return None, str(exc)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception as close_exc:
+                print(f"[ERROR] Failed closing DB connection after order insert: {close_exc}")
+
+
 def delete_user_from_db(banner_id):
     if not all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
         print("[WARNING] Skipping deletion: Database environment variables not set.")
@@ -498,29 +530,12 @@ def order_page():
         'timestamp': time.time(),
     }
     # Attempt to persist the order to the orders table in MySQL (preferred)
-    order_no = None
-    if all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
-        try:
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO orders (banner_id, item, restaurant, status, ts) VALUES (%s, %s, %s, %s, %s)",
-                    (banner_id, item, 'Campus Pickup', 'pending', time.time()),
-                )
-                order_no = cur.lastrowid
-            conn.commit()
-            print(f"[INFO] Order persisted to DB with order_no={order_no}")
-        except Exception as e:
-            print(f"[ERROR] Failed to persist order to DB: {e}")
-        finally:
-            try:
-                if 'conn' in locals() and conn:
-                    conn.close()
-            except Exception:
-                pass
+    order_no, db_error = save_order_to_db(banner_id, item, 'Campus Pickup', 'pending')
 
     # Keep an in-memory record as well for quick access
     order['order_no'] = order_no
+    if db_error:
+        order['db_error'] = db_error
     orders.append(order)
 
     message = f"Order received for {banner_id}: {item}."
@@ -528,6 +543,8 @@ def order_page():
         message = f"Order received for {user_display} ({banner_id}): {item}."
     if order_no:
         message += f" (order_no: {order_no})"
+    elif db_error:
+        message += " (warning: failed to save order to database)"
 
     return render_template('order.html', result={'success': True, 'message': message}, form_data={'banner_id': ''})
 
