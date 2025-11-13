@@ -22,7 +22,22 @@
         .verification-entry.failure {
             border-left-color: #dc3545;
         }
-        .timestamp {
+        .fulfilled-order {
+            background-color: #d4edda;
+            opacity: 0.7;
+        }
+        .auto-refresh-indicator {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 1000;
+        }
+    </style>
             color: #6c757d;
             font-size: 0.875rem;
         }
@@ -37,6 +52,11 @@
             <span class="navbar-brand mb-0 h1">Face Recognition Admin Panel</span>
         </div>
     </nav>
+
+    <!-- Auto-refresh indicator -->
+    <div class="auto-refresh-indicator" id="refreshIndicator">
+        Auto-refresh in <span id="countdown">30</span>s
+    </div>
 
     <div class="container">
         <div class="row">
@@ -54,7 +74,10 @@
                 <div class="card mt-3">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="mb-0">Recent Orders</h5>
-                        <button class="btn btn-sm btn-primary" onclick="refreshOrders()">Refresh</button>
+                        <div>
+                            <button class="btn btn-sm btn-warning me-2" onclick="cleanupFulfilledOrders()">Clean Fulfilled</button>
+                            <button class="btn btn-sm btn-primary" onclick="refreshOrders()">Refresh</button>
+                        </div>
                     </div>
                     <div class="card-body verification-log" id="ordersList">
                         <!-- Orders will be inserted here -->
@@ -151,14 +174,82 @@
             `).join('');
         }
 
+        // Cleanup fulfilled orders
+        async function cleanupFulfilledOrders() {
+            if (!confirm('Delete all fulfilled orders?')) return;
+            
+            try {
+                const response = await fetch('/api/cleanup_orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({action: 'delete_fulfilled'})
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    alert(result.message || 'Fulfilled orders cleaned up successfully');
+                    refreshOrders();
+                } else {
+                    alert('Failed to cleanup orders');
+                }
+            } catch (error) {
+                console.error('Error cleaning up orders:', error);
+                alert('Error connecting to server');
+            }
+        }
+
+        // Auto-refresh countdown
+        let refreshCountdown = 30;
+        function updateCountdown() {
+            document.getElementById('countdown').textContent = refreshCountdown;
+            refreshCountdown--;
+            
+            if (refreshCountdown < 0) {
+                refreshLog();
+                refreshOrders();
+                refreshCountdown = 30;
+            }
+        }
+
+        // Refresh orders with styling for fulfilled orders
+        async function refreshOrders() {
+            const response = await fetch('/admin/orders');
+            const data = await response.json();
+            const list = document.getElementById('ordersList');
+
+            if (!data.orders || data.orders.length === 0) {
+                list.innerHTML = '<div class="text-muted">No recent orders</div>';
+                return;
+            }
+
+            list.innerHTML = data.orders.map(o => {
+                const isFulfilled = o.status && (o.status.toLowerCase().includes('fulfilled') || o.status.toLowerCase().includes('completed'));
+                const entryClass = `verification-entry ${isFulfilled ? 'fulfilled-order' : ''}`;
+                
+                return `
+                    <div class="${entryClass}">
+                        <div class="d-flex justify-content-between">
+                            <strong>Order #${o.order_no ? o.order_no : '—'}</strong>
+                            <span class="timestamp">${o.timestamp}</span>
+                        </div>
+                        <div>
+                            <div>Banner ID: <strong>${o.banner_id}</strong>${o.name ? ` — ${o.name}` : ''}</div>
+                            <div>Item: <span class="match-score">${o.item}</span></div>
+                            ${o.restaurant ? `<div>Restaurant: ${o.restaurant}</div>` : ''}
+                            <div>Status: <strong ${isFulfilled ? 'style="color: green;"' : ''}>${o.status}</strong></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
         // Initial load
         refreshLog();
-        
-        // Initial orders load
         refreshOrders();
 
-        // Auto-refresh every 30 seconds
-        setInterval(() => { refreshLog(); refreshOrders(); }, 30000);
+        // Auto-refresh every 30 seconds with countdown
+        setInterval(updateCountdown, 1000);
+        setInterval(() => { refreshLog(); refreshOrders(); refreshCountdown = 30; }, 30000);
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>

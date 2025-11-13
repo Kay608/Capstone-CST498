@@ -22,7 +22,14 @@ from flask import Flask, request, jsonify, render_template
 from robot_navigation.robot_controller import RobotController
 from threading import Thread
 import time
-from zeroconf import Zeroconf, ServiceInfo
+# Optional imports for network discovery
+try:
+    from zeroconf import Zeroconf, ServiceInfo
+    ZEROCONF_AVAILABLE = True
+except ImportError:
+    print("[INFO] Zeroconf not available - network discovery disabled")
+    ZEROCONF_AVAILABLE = False
+
 import socket
 import face_recognition
 
@@ -253,20 +260,43 @@ def save_order_to_db(banner_id: str, item: str, restaurant: str, status: str = '
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO orders (banner_id, item, restaurant, status, ts)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (banner_id, item, restaurant, status, time.time()),
-            )
-            order_no = cur.lastrowid
+            # First try with restaurant column
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO orders (banner_id, item, restaurant, status, ts)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (banner_id, item, restaurant, status, time.time()),
+                )
+                order_no = cur.lastrowid
+                print(f"[INFO] Saved order {order_no} for {banner_id} to database (with restaurant).")
+            except pymysql.MySQLError as e:
+                # If restaurant column doesn't exist, try without it
+                if "Unknown column 'restaurant'" in str(e):
+                    print("[WARN] Restaurant column not found, saving without restaurant...")
+                    cur.execute(
+                        """
+                        INSERT INTO orders (banner_id, item, status, ts)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (banner_id, item, status, time.time()),
+                    )
+                    order_no = cur.lastrowid
+                    print(f"[INFO] Saved order {order_no} for {banner_id} to database (without restaurant).")
+                else:
+                    raise e
         conn.commit()
-        print(f"[INFO] Saved order {order_no} for {banner_id} to database.")
         return order_no, None
     except pymysql.MySQLError as exc:
         print(f"[ERROR] Failed to save order to database: {exc}")
-        return None, str(exc)
+        # Check for foreign key constraint error (user doesn't exist)
+        if "foreign key constraint fails" in str(exc).lower() and "banner_id" in str(exc):
+            return None, "Banner ID not found. You must be registered in the facial recognition system before placing orders. Please contact admin to register."
+        elif "duplicate entry" in str(exc).lower():
+            return None, "Duplicate order detected. Please try again."
+        else:
+            return None, f"Database error: {exc}"
     finally:
         if conn:
             try:
@@ -303,7 +333,6 @@ def delete_user_from_db(banner_id):
 known_encodings = []
 known_names = []
 
-@app.before_first_request
 def initialize_database_and_encodings():
     """
     Initialize the database and load face encodings once before the first request.
@@ -314,6 +343,10 @@ def initialize_database_and_encodings():
     init_db()
     known_encodings, known_names = load_encodings_from_db()
     print("[INFO] Initialization complete.")
+
+# Initialize on app startup
+with app.app_context():
+    initialize_database_and_encodings()
 
 
 orders = []
@@ -496,12 +529,15 @@ def order_page():
     # POST: place the order
     banner_id = request.form.get('banner_id', '').strip()
     item = request.form.get('item')
+    restaurant = request.form.get('restaurant')
     form_data['banner_id'] = banner_id
 
     if not banner_id:
         return render_template('order.html', result={'success': False, 'message': 'Missing banner_id.'}, form_data=form_data)
     if not item:
         return render_template('order.html', result={'success': False, 'message': 'Missing item selection.'}, form_data=form_data)
+    if not restaurant:
+        return render_template('order.html', result={'success': False, 'message': 'Missing restaurant selection.'}, form_data=form_data)
 
     # Try to resolve human-readable name from the users table (optional)
     user_display = None
@@ -524,27 +560,27 @@ def order_page():
 
     order = {
         'user': {'banner_id': banner_id, 'name': user_display},
-        'restaurant': 'Campus Pickup',
+        'restaurant': restaurant,
         'items': [item],
         'status': 'pending',
         'timestamp': time.time(),
     }
     # Attempt to persist the order to the orders table in MySQL (preferred)
-    order_no, db_error = save_order_to_db(banner_id, item, 'Campus Pickup', 'pending')
+    order_no, db_error = save_order_to_db(banner_id, item, restaurant, 'pending')
+
+    # If there's a database error, return error immediately
+    if db_error:
+        return render_template('order.html', result={'success': False, 'message': db_error}, form_data=form_data)
 
     # Keep an in-memory record as well for quick access
     order['order_no'] = order_no
-    if db_error:
-        order['db_error'] = db_error
     orders.append(order)
 
-    message = f"Order received for {banner_id}: {item}."
+    message = f"Order received for {banner_id}: {item} from {restaurant}."
     if user_display:
-        message = f"Order received for {user_display} ({banner_id}): {item}."
+        message = f"Order received for {user_display} ({banner_id}): {item} from {restaurant}."
     if order_no:
         message += f" (order_no: {order_no})"
-    elif db_error:
-        message += " (warning: failed to save order to database)"
 
     return render_template('order.html', result={'success': True, 'message': message}, form_data={'banner_id': ''})
 
@@ -596,6 +632,117 @@ def get_verification_log():
     })
 
 
+@app.route('/api/log_verification', methods=['POST'])
+def api_log_verification():
+    """API endpoint to receive verification logs from remote devices (like Raspberry Pi)."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
+        # Extract required fields
+        name = data.get('name', 'Unknown')
+        matched = data.get('matched', False)
+        confidence = data.get('confidence', 0.0)
+        location = data.get('location', 'Remote Device')
+        
+        # Log the verification using the existing function
+        log_verification(name, matched, confidence, location)
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Verification logged successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to log remote verification: {e}")
+        return jsonify({'error': 'Failed to log verification'}), 500
+
+
+@app.route('/api/process_order', methods=['POST'])
+def api_process_order():
+    """API endpoint to process order fulfillment when face is recognized."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
+        banner_id = data.get('banner_id')
+        action = data.get('action', 'fulfill')
+        
+        if not banner_id:
+            return jsonify({'error': 'banner_id required'}), 400
+        
+        # Find pending orders for this banner_id
+        if all([DB_HOST, DB_USER, DB_PASSWORD, DB_NAME]):
+            try:
+                conn = get_db_connection()
+                with conn.cursor() as cur:
+                    # Check for pending orders (with fallback for missing restaurant column)
+                    try:
+                        cur.execute(
+                            "SELECT order_no, item, restaurant FROM orders WHERE banner_id = %s AND status = 'pending'",
+                            (banner_id,)
+                        )
+                        pending_orders = cur.fetchall()
+                        has_restaurant = True
+                    except pymysql.MySQLError as e:
+                        if "Unknown column 'restaurant'" in str(e):
+                            cur.execute(
+                                "SELECT order_no, item FROM orders WHERE banner_id = %s AND status = 'pending'",
+                                (banner_id,)
+                            )
+                            pending_orders = cur.fetchall()
+                            has_restaurant = False
+                            # Add restaurant field for consistency
+                            for order in pending_orders:
+                                order['restaurant'] = 'N/A'
+                        else:
+                            raise e
+                    
+                    if pending_orders:
+                        # Update all pending orders to fulfilled
+                        cur.execute(
+                            "UPDATE orders SET status = 'fulfilled' WHERE banner_id = %s AND status = 'pending'",
+                            (banner_id,)
+                        )
+                        conn.commit()
+                        
+                        # Get order details for response
+                        items = [f"{order['item']} from {order['restaurant']}" for order in pending_orders]
+                        order_numbers = [order['order_no'] for order in pending_orders]
+                        
+                        return jsonify({
+                            'success': True,
+                            'order_fulfilled': True,
+                            'banner_id': banner_id,
+                            'order_numbers': order_numbers,
+                            'items': items,
+                            'message': f'Fulfilled {len(pending_orders)} order(s)'
+                        }), 200
+                    else:
+                        return jsonify({
+                            'success': True,
+                            'order_fulfilled': False,
+                            'banner_id': banner_id,
+                            'message': 'No pending orders found'
+                        }), 200
+                        
+                conn.close()
+                
+            except Exception as e:
+                print(f"[ERROR] Database error in order processing: {e}")
+                return jsonify({'error': 'Database error'}), 500
+        else:
+            return jsonify({'error': 'Database not configured'}), 503
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to process order: {e}")
+        return jsonify({'error': 'Failed to process order'}), 500
+
+
 @app.route('/admin/orders', methods=['GET'])
 def get_admin_orders():
     """Return recent orders from DB (preferred) or from in-memory list as fallback."""
@@ -605,8 +752,20 @@ def get_admin_orders():
         try:
             conn = get_db_connection()
             with conn.cursor() as cur:
-                cur.execute("SELECT order_no, banner_id, item, restaurant, status, ts FROM orders ORDER BY order_no DESC LIMIT 50;")
-                rows = cur.fetchall()
+                # First try with restaurant column
+                try:
+                    cur.execute("SELECT order_no, banner_id, item, restaurant, status, ts FROM orders ORDER BY order_no DESC LIMIT 50;")
+                    rows = cur.fetchall()
+                    has_restaurant = True
+                except pymysql.MySQLError as e:
+                    if "Unknown column 'restaurant'" in str(e):
+                        print("[WARN] Restaurant column not found, querying without it...")
+                        cur.execute("SELECT order_no, banner_id, item, status, ts FROM orders ORDER BY order_no DESC LIMIT 50;")
+                        rows = cur.fetchall()
+                        has_restaurant = False
+                    else:
+                        raise e
+                
                 for r in rows:
                     ts = r.get('ts')
                     try:
@@ -618,7 +777,7 @@ def get_admin_orders():
                         'banner_id': r.get('banner_id'),
                         'name': None,
                         'item': r.get('item'),
-                        'restaurant': r.get('restaurant'),
+                        'restaurant': r.get('restaurant', 'N/A') if has_restaurant else 'N/A',
                         'status': r.get('status'),
                         'timestamp': ts_str,
                     })
@@ -663,6 +822,11 @@ def log_verification(name, matched, confidence, location=None):
         verification_log.pop(0)
 
 def register_mdns_service(port=5001):
+    if not ZEROCONF_AVAILABLE:
+        print("[INFO] Zeroconf not available - skipping mDNS service registration")
+        return
+    
+    from zeroconf import Zeroconf, ServiceInfo
     zeroconf = Zeroconf()
     ip = socket.gethostbyname(socket.gethostname())
     desc = {'path': '/'}
@@ -678,7 +842,42 @@ def register_mdns_service(port=5001):
     print(f"[mDNS] Service registered as appservice.local:{port}")
     return zeroconf
 
+
+@app.route('/api/cleanup_orders', methods=['POST'])
+def cleanup_orders():
+    """Clean up fulfilled orders from the database."""
+    try:
+        data = request.get_json() or {}
+        action = data.get('action', '')
+        
+        if action != 'delete_fulfilled':
+            return jsonify({'error': 'Invalid action'}), 400
+            
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            # Delete orders marked as 'fulfilled' or 'completed'
+            cur.execute("""
+                DELETE FROM orders 
+                WHERE status IN ('fulfilled', 'completed', 'delivered')
+            """)
+            
+            deleted_count = cur.rowcount
+            conn.commit()
+            
+            return jsonify({
+                'success': True, 
+                'message': f'Deleted {deleted_count} fulfilled order(s)'
+            })
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to cleanup orders: {e}")
+        return jsonify({'error': 'Failed to cleanup orders'}), 500
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
+
+
 if __name__ == '__main__':
     mdns = register_mdns_service(port=5001)
-    # The initialization is now handled by the before_first_request hook
+    # The initialization is now handled during app startup
     app.run(host='0.0.0.0', port=5001, debug=_run_debug_mode)

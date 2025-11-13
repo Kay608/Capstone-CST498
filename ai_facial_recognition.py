@@ -10,6 +10,8 @@ import pymysql  # For MySQL handling
 import numpy as np  # To deserialize BLOBs back to numpy arrays
 from pathlib import Path
 from dotenv import load_dotenv
+import requests
+import json
 
 # Ensure .env files are loaded before reading DB configuration
 _ROOT_DIR = Path(__file__).resolve().parent
@@ -45,6 +47,9 @@ DB_USER = os.environ.get('DB_USER')
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_NAME = os.environ.get('DB_NAME')
 
+# --- Flask App Configuration for Remote Logging ---
+FLASK_APP_URL = os.environ.get('FLASK_APP_URL', 'http://localhost:5001')  # Default to localhost:5001
+
 # --- Recognition Configuration ---
 MATCH_THRESHOLD = 0.65
 FRAME_SKIP = 3  # Process every Nth frame for performance on Pi
@@ -56,6 +61,13 @@ STATUS_LOG_INTERVAL = 5  # Seconds between "no activity" status logs
 # Global state
 robot_interface = None
 frame_count = 0
+known_encodings = []
+known_names = []
+
+# Face tracking for stable display
+face_tracking = {}  # Dictionary to track face positions and recognition state
+FACE_PERSISTENCE_TIME = 3.0  # Keep green square for 3 seconds after last recognition
+FACE_POSITION_TOLERANCE = 50  # Pixels tolerance for face position matching
 
 
 def has_display() -> bool:
@@ -340,9 +352,9 @@ def match_face_encoding(encoding):
     if min_distance < MATCH_THRESHOLD:
         banner_id, display_name = known_names[best_match_idx]
         name = display_name or banner_id
-        return name, True, confidence
+        return name, True, confidence, banner_id
 
-    return "Unknown", False, confidence
+    return "Unknown", False, confidence, None
 
 
 def analyze_frame(frame, skip_frame_check=False):
@@ -364,7 +376,7 @@ def analyze_frame(frame, skip_frame_check=False):
 
     results = []
     for encoding, box in zip(encodings, boxes):
-        name, matched, confidence = match_face_encoding(encoding)
+        name, matched, confidence, banner_id = match_face_encoding(encoding)
         # Scale box coordinates back to original frame size
         top, right, bottom, left = box
         top = int(top / FRAME_SCALE)
@@ -377,24 +389,190 @@ def analyze_frame(frame, skip_frame_check=False):
             "matched": matched,
             "box": (top, right, bottom, left),
             "confidence": confidence,
+            "banner_id": banner_id,
         })
     return results
 
 
 def annotate_frame(frame):
+    """Enhanced annotation with persistent face tracking for stable green squares."""
+    global face_tracking
+    
     annotated = frame.copy()
     results = analyze_frame(frame)
+    current_time = time.time()
 
+    # Update face tracking with current detections
+    current_faces = {}
+    
     for result in results:
         top, right, bottom, left = result["box"]
-        color = (0, 255, 0) if result["matched"] else (0, 0, 255)
-        label = result["name"]
-        if result["confidence"] > 0:
-            label = f"{label} ({result['confidence']:.2f})"
-        cv2.rectangle(annotated, (left, top), (right, bottom), color, 2)
-        cv2.putText(annotated, label, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        face_center = ((left + right) // 2, (top + bottom) // 2)
+        
+        # Find if this face matches an existing tracked face
+        matched_track_id = None
+        for track_id, tracked_face in face_tracking.items():
+            tracked_center = tracked_face['center']
+            distance = ((face_center[0] - tracked_center[0])**2 + (face_center[1] - tracked_center[1])**2)**0.5
+            
+            if distance < FACE_POSITION_TOLERANCE:
+                matched_track_id = track_id
+                break
+        
+        # Update or create face tracking
+        if matched_track_id:
+            track_id = matched_track_id
+        else:
+            track_id = f"face_{current_time}_{face_center[0]}_{face_center[1]}"
+        
+        current_faces[track_id] = {
+            'box': (top, right, bottom, left),
+            'center': face_center,
+            'name': result['name'],
+            'matched': result['matched'],
+            'confidence': result['confidence'],
+            'last_seen': current_time,
+            'first_recognized': face_tracking.get(track_id, {}).get('first_recognized', current_time if result['matched'] else None)
+        }
+        
+        # If this face was just recognized, mark the time
+        if result['matched'] and not face_tracking.get(track_id, {}).get('matched', False):
+            current_faces[track_id]['first_recognized'] = current_time
+
+    # Remove old face tracks that haven't been seen recently
+    face_tracking = {track_id: data for track_id, data in face_tracking.items() 
+                    if current_time - data['last_seen'] < FACE_PERSISTENCE_TIME}
+    
+    # Update face tracking with current faces
+    face_tracking.update(current_faces)
+
+    # Draw all tracked faces with persistent recognition state
+    for track_id, tracked_face in face_tracking.items():
+        top, right, bottom, left = tracked_face['box']
+        
+        # Determine if we should show this face as recognized
+        # Show as recognized if: currently matched OR was recognized recently
+        time_since_last_seen = current_time - tracked_face['last_seen']
+        time_since_recognized = float('inf')
+        
+        if tracked_face['first_recognized']:
+            time_since_recognized = current_time - tracked_face['first_recognized']
+        
+        # Show green if currently matched OR was recently recognized and still visible
+        show_as_recognized = (tracked_face['matched'] or 
+                            (tracked_face['first_recognized'] and 
+                             time_since_last_seen < 0.5 and 
+                             time_since_recognized < FACE_PERSISTENCE_TIME))
+        
+        if show_as_recognized:
+            # Green thick border and overlay for recognized faces
+            color = (0, 255, 0)  # Green
+            thickness = 4
+            label = f"✓ {tracked_face['name']} ({tracked_face['confidence']:.2f})"
+            
+            # Add semi-transparent green overlay
+            overlay = annotated.copy()
+            cv2.rectangle(overlay, (left, top), (right, bottom), color, -1)
+            cv2.addWeighted(annotated, 0.85, overlay, 0.15, 0, annotated)
+            
+            # Add green glow effect
+            glow_overlay = annotated.copy()
+            cv2.rectangle(glow_overlay, (left-2, top-2), (right+2, bottom+2), color, -1)
+            cv2.addWeighted(annotated, 0.95, glow_overlay, 0.05, 0, annotated)
+        else:
+            # Red border for unrecognized faces
+            color = (0, 0, 255)  # Red
+            thickness = 2
+            label = f"Unknown ({tracked_face['confidence']:.2f})"
+        
+        # Draw the rectangle border
+        cv2.rectangle(annotated, (left, top), (right, bottom), color, thickness)
+        
+        # Draw label with background for better visibility
+        label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+        label_bg_top = max(top - label_size[1] - 15, 0)
+        cv2.rectangle(annotated, (left, label_bg_top), (left + label_size[0] + 10, top), color, -1)
+        cv2.putText(annotated, label, (left + 5, top - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+    # Add status information at the top of the frame
+    status_text = f"Monitoring: {len(known_encodings)} faces | Tracking: {len(face_tracking)} | Flask: {FLASK_APP_URL.split('/')[-1]}"
+    cv2.putText(annotated, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+    cv2.putText(annotated, status_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
 
     return annotated, results
+
+def log_verification_http(name, matched, confidence, location=None):
+    """
+    Log verification to Flask app via HTTP request.
+    Falls back gracefully if Flask app is not reachable.
+    """
+    try:
+        print(f"[HTTP] Attempting to log verification to {FLASK_APP_URL}/api/log_verification")
+        print(f"[HTTP] Data: name={name}, matched={matched}, confidence={confidence}")
+        
+        data = {
+            'name': name,
+            'matched': matched,
+            'confidence': confidence,
+            'location': location or 'Raspberry Pi'
+        }
+        
+        response = requests.post(
+            f"{FLASK_APP_URL}/api/log_verification",
+            json=data,
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            print(f"[HTTP] ✅ Logged verification: {name} ({'✓' if matched else '✗'})")
+        else:
+            print(f"[HTTP] ❌ Failed to log verification: HTTP {response.status_code}")
+            
+    except requests.exceptions.RequestException as e:
+        print(f"[HTTP] ❌ Could not reach Flask app for logging: {e}")
+    except Exception as e:
+        print(f"[ERROR] Verification logging error: {e}")
+
+
+def process_order_fulfillment(banner_id, display_name):
+    """
+    Check for pending orders and mark as fulfilled when face is recognized.
+    """
+    try:
+        print(f"[HTTP] Processing order fulfillment for {display_name} ({banner_id})")
+        print(f"[HTTP] Sending request to {FLASK_APP_URL}/api/process_order")
+        
+        data = {
+            'banner_id': banner_id,
+            'action': 'fulfill'
+        }
+        
+        response = requests.post(
+            f"{FLASK_APP_URL}/api/process_order",
+            json=data,
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('order_fulfilled'):
+                print(f"[HTTP] ✅ Order fulfilled for {display_name} ({banner_id})")
+                print(f"[HTTP] Items: {result.get('items', 'N/A')}")
+                return True
+            else:
+                print(f"[ORDER] No pending orders found for {banner_id}")
+                return False
+        else:
+            print(f"[WARN] Failed to process order: HTTP {response.status_code}")
+            return False
+            
+    except requests.exceptions.RequestException as e:
+        print(f"[WARN] Could not reach Flask app for order processing: {e}")
+        return False
+    except Exception as e:
+        print(f"[ERROR] Order processing error: {e}")
+        return False
+
 
 def recognize_face(location=None, use_robot_camera=False):
     """
@@ -405,10 +583,8 @@ def recognize_face(location=None, use_robot_camera=False):
         location: Optional location string for logging
         use_robot_camera: If True, use robot's hardware interface camera
     """
-    try:
-        from flask_api.app import log_verification
-    except ImportError:
-        log_verification = None  # Flask not available, skip logging
+    # Use HTTP-based logging instead of direct import
+    location = location or "Raspberry Pi"
     
     # Get frame from robot camera or local camera
     if use_robot_camera and robot_interface and robot_interface.is_available():
@@ -432,12 +608,15 @@ def recognize_face(location=None, use_robot_camera=False):
     for result in results:
         if result["matched"]:
             print(f"[ACCESS GRANTED] Recognized: {result['name']} ({result['confidence']:.2f})")
-            if log_verification:
-                log_verification(result["name"], True, result["confidence"], location)
+            log_verification_http(result["name"], True, result["confidence"], location)
+            
+            # Process order fulfillment if we have a banner_id
+            if result["banner_id"]:
+                process_order_fulfillment(result["banner_id"], result["name"])
+            
             return result["name"]
         else:
-            if log_verification:
-                log_verification("Unknown", False, result["confidence"], location)
+            log_verification_http("Unknown", False, result["confidence"], location)
 
     if not known_encodings:
         print("[ACCESS DENIED] No known faces in database.")
@@ -446,8 +625,7 @@ def recognize_face(location=None, use_robot_camera=False):
             print(f"[ACCESS DENIED] Face not recognized (confidence {result['confidence']:.2f}).")
     else:
         print("[INFO] No face detected in frame.")
-        if log_verification:
-            log_verification("No Face Detected", False, 0.0, location)
+        log_verification_http("No Face Detected", False, 0.0, location)
     return None
 
 def robot_action_on_recognition(result: dict) -> None:

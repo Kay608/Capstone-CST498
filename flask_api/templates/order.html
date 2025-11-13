@@ -28,15 +28,33 @@
               <div class="mb-3">
                 <label for="banner_id" class="form-label">Banner ID</label>
                 <input type="text" class="form-control" id="banner_id" name="banner_id" required value="{{ form_data.banner_id if form_data and form_data.banner_id else '' }}">
-                <div class="form-text">Enter your Banner ID (e.g. B00123456).</div>
+                <div class="form-text">
+                  <strong>Important:</strong> You must be registered in the facial recognition system to place orders. 
+                  Enter your 9-digit Banner ID (e.g. 123456789).
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label">Choose Restaurant</label>
+                <select class="form-select" name="restaurant" required>
+                  <option value="">Select a restaurant...</option>
+                  <option value="Chick-fil-a">Chick-fil-a</option>
+                  <option value="Pavvo's Pizza">Pavvo's Pizza</option>
+                  <option value="Starbucks">Starbucks</option>
+                  <option value="Aggie Wings">Aggie Wings</option>
+                </select>
               </div>
 
               <div class="mb-3">
                 <label class="form-label">Choose Item</label>
                 <select class="form-select" name="item" required>
+                  <option value="">Select an item...</option>
                   <option value="sandwich">Sandwich</option>
                   <option value="burger">Burger</option>
                   <option value="fries">Fries</option>
+                  <option value="Coffee">Coffee</option>
+                  <option value="Pepperoni Pizza">Pepperoni Pizza</option>
+                  <option value="Wings">Wings</option>
                 </select>
               </div>
 

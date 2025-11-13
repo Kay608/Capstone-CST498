@@ -13,3 +13,4 @@ waitress==3.0.2 # For serving the Flask app in production. Start with python -m 
 tensorflow==2.13.0 # Required for MobileNetV2 traffic sign classifier (CPU build)
 typing-extensions==4.5.0 
 zeroconf==0.132.2
+requests==2.31.0 # For HTTP communication between Pi and Flask app
