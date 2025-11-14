@@ -35,11 +35,17 @@ except Exception:
 
 # Import robot hardware interface
 try:
-    from robot_navigation.hardware_interface import create_hardware_interface, HardwareInterface
+    from robot_navigation.hardware_interface import (
+        create_hardware_interface,
+        HardwareInterface,
+        detect_robot_hardware,
+    )
     ROBOT_AVAILABLE = True
+    ROBOT_HARDWARE_PRESENT = detect_robot_hardware()
 except ImportError:
     print("[WARN] Could not import robot hardware interface. Robot integration disabled.")
     ROBOT_AVAILABLE = False
+    ROBOT_HARDWARE_PRESENT = False
 
 # --- JawsDB (MySQL) Configuration ---
 DB_HOST = os.environ.get('DB_HOST')
@@ -665,23 +671,44 @@ def robot_action_on_recognition(result: dict) -> None:
         print(f"[ERROR] Robot action failed: {e}")
 
 
-def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable] = None) -> None:
+def run_camera_loop(headless=False, use_robot: Optional[bool] = None, callback: Optional[Callable] = None) -> None:
     """
     Main camera loop for facial recognition.
     
     Args:
         headless: If True, don't show GUI windows (for Pi deployment)
-        use_robot: If True, use robot's camera interface
+        use_robot: Force robot usage (True), disable robot (False), or auto (None)
         callback: Optional callback function(status, result) called on recognition events
     """
-    global robot_interface
+    global robot_interface, ROBOT_HARDWARE_PRESENT
     
-    # Initialize robot interface if requested
-    if use_robot and ROBOT_AVAILABLE:
+    # Decide whether to enable robot integration
+    active_robot = False
+    robot_interface = None
+
+    if use_robot is None:
+        active_robot = ROBOT_AVAILABLE and ROBOT_HARDWARE_PRESENT
+        if active_robot:
+            print("[INFO] Robot hardware detected - enabling robot integration")
+        elif ROBOT_AVAILABLE:
+            print("[INFO] Robot hardware not detected - running camera-only mode")
+    elif use_robot and not ROBOT_AVAILABLE:
+        print("[WARN] Robot interface module unavailable - running without robot hardware")
+    else:
+        active_robot = bool(use_robot)
+
+    if active_robot and ROBOT_AVAILABLE:
         robot_interface = create_hardware_interface(use_simulation=False)
-        if not robot_interface.is_available():
-            print("[WARN] Robot hardware not available, falling back to local camera")
-            use_robot = False
+        if robot_interface.is_available():
+            print("[INFO] Robot hardware interface ready")
+            ROBOT_HARDWARE_PRESENT = True
+        else:
+            print("[WARN] Robot hardware requested but unavailable - falling back to local camera")
+            robot_interface = None
+            active_robot = False
+            ROBOT_HARDWARE_PRESENT = False
+    
+    use_robot = active_robot
     
     # Initialize camera
     camera_source: Optional[CameraSource] = None
@@ -783,6 +810,9 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
                 
     except KeyboardInterrupt:
         print("\n[INFO] Shutting down facial recognition...")
+        if robot_interface and robot_interface.is_available():
+            with suppress(Exception):
+                robot_interface.stop()
     finally:
         if camera_source:
             camera_source.release()
@@ -790,6 +820,7 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
             cv2.destroyAllWindows()
         if robot_interface:
             robot_interface.stop()
+            robot_interface = None
 
 
 def capture_snapshot(output_path: Optional[str] = None) -> None:
@@ -836,8 +867,11 @@ def parse_args():
                        help="Optional path to save the annotated snapshot when using --snapshot.")
     parser.add_argument("--headless", action="store_true",
                        help="Run in headless mode (no GUI display) for Raspberry Pi deployment.")
-    parser.add_argument("--robot", action="store_true",
-                       help="Use robot's camera interface and enable robot actions.")
+    robot_group = parser.add_mutually_exclusive_group()
+    robot_group.add_argument("--force-robot", action="store_true",
+                            help="Force enable robot hardware, overriding automatic detection.")
+    robot_group.add_argument("--no-robot", action="store_true",
+                            help="Force disable robot hardware, even if detected.")
     parser.add_argument("--model", choices=['hog', 'cnn'], default='hog',
                        help="Face detection model: 'hog' (faster, CPU) or 'cnn' (accurate, GPU).")
     parser.add_argument("--threshold", type=float, default=0.65,
@@ -863,8 +897,23 @@ def main() -> None:
         print("[WARN] No graphical display detected; enabling headless mode.")
         headless_mode = True
 
+    if args.force_robot:
+        robot_preference: Optional[bool] = True
+    elif args.no_robot:
+        robot_preference = False
+    else:
+        robot_preference = None
+
+    if robot_preference is None:
+        detected_status = "detected" if ROBOT_HARDWARE_PRESENT else "not detected"
+        robot_config_msg = f"auto ({detected_status})"
+    elif robot_preference:
+        robot_config_msg = "forced-on"
+    else:
+        robot_config_msg = "disabled"
+
     print(f"[CONFIG] Headless mode: {headless_mode}")
-    print(f"[CONFIG] Robot integration: {args.robot}")
+    print(f"[CONFIG] Robot integration: {robot_config_msg}")
     print(f"[CONFIG] Offline mode: {args.offline}")
     
     # If offline mode, disable database connection
@@ -881,7 +930,7 @@ def main() -> None:
     if args.snapshot:
         capture_snapshot(args.output)
     else:
-        run_camera_loop(headless=headless_mode, use_robot=args.robot)
+        run_camera_loop(headless=headless_mode, use_robot=robot_preference)
 
 
 if __name__ == "__main__":

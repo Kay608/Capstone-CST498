@@ -5,8 +5,10 @@ Hardware Interface for Yahboom Raspbot
 """
 
 import time
+import platform
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional
+from contextlib import suppress
 import logging
 import cv2 # Import OpenCV
 
@@ -21,6 +23,43 @@ except ImportError:
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_DETECTED_REAL_ROBOT: Optional[bool] = None
+
+
+def _is_raspberry_pi() -> bool:
+    """Best-effort check for Raspberry Pi hardware."""
+    if platform.system().lower() != "linux":
+        return False
+    with suppress(Exception):
+        with open("/proc/device-tree/model", "r", encoding="utf-8") as model_file:
+            return "raspberry pi" in model_file.read().lower()
+    return False
+
+
+def detect_robot_hardware(force_refresh: bool = False) -> bool:
+    """Detect whether the Yahboom robot hardware is available on this host."""
+    global _DETECTED_REAL_ROBOT
+    if not force_refresh and _DETECTED_REAL_ROBOT is not None:
+        return _DETECTED_REAL_ROBOT
+
+    if YB_Pcb_Car is None:
+        _DETECTED_REAL_ROBOT = False
+        return _DETECTED_REAL_ROBOT
+
+    if not _is_raspberry_pi():
+        _DETECTED_REAL_ROBOT = False
+        return _DETECTED_REAL_ROBOT
+
+    with suppress(Exception):
+        car = YB_Pcb_Car()
+        car.Car_Stop()
+        del car
+        _DETECTED_REAL_ROBOT = True
+        return _DETECTED_REAL_ROBOT
+
+    _DETECTED_REAL_ROBOT = False
+    return _DETECTED_REAL_ROBOT
 
 class HardwareInterface(ABC):
     """Abstract base class for hardware interface"""
@@ -375,18 +414,33 @@ class SimulatedBuzzer:
         """Simulate custom buzzer control."""
         print(f"[SIMULATED BUZZER] Custom buzz: {frequency}Hz for {duration}ms")
 
-def create_hardware_interface(use_simulation: bool = True, use_picamera: bool = True) -> HardwareInterface:
-    """
-    Factory function to create appropriate hardware interface.
-    
+def create_hardware_interface(use_simulation: Optional[bool] = None, use_picamera: bool = True) -> HardwareInterface:
+    """Factory function to create appropriate hardware interface.
+
     Args:
-        use_simulation: If True, returns simulated interface for testing
+        use_simulation: Explicitly control simulation mode. ``True`` forces the
+            simulator, ``False`` forces real hardware, ``None`` auto-detects.
         use_picamera: If True, attempts to use Pi Camera 2 (faster on Pi 5)
     """
-    if use_simulation:
+    if use_simulation is True:
         return SimulatedRaspbotInterface()
-    else:
-        return YahboomRaspbotInterface(use_picamera=use_picamera)
+
+    if use_simulation is False:
+        interface = YahboomRaspbotInterface(use_picamera=use_picamera)
+        if not interface.is_available():
+            logger.warning("Real hardware requested but unavailable; falling back to simulation")
+            return SimulatedRaspbotInterface()
+        return interface
+
+    if detect_robot_hardware():
+        interface = YahboomRaspbotInterface(use_picamera=use_picamera)
+        if interface.is_available():
+            return interface
+        global _DETECTED_REAL_ROBOT
+        _DETECTED_REAL_ROBOT = False
+        logger.warning("Detected Yahboom hardware but initialization failed; using simulation")
+
+    return SimulatedRaspbotInterface()
 
 # Example usage and testing
 if __name__ == "__main__":

@@ -14,4 +14,4 @@ tensorflow==2.13.0 # Required for MobileNetV2 traffic sign classifier (CPU build
 typing-extensions==4.5.0 
 zeroconf==0.132.2
 ultralytics==8.3.223 # For YOLOv8 object detection model
-requests=2.31.0 
+requests==2.31.0 
