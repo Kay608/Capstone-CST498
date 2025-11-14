@@ -395,12 +395,12 @@ def analyze_frame(frame, skip_frame_check=False):
     return results
 
 
-def annotate_frame(frame):
+def annotate_frame(frame, force_process: bool = False):
     """Enhanced annotation with persistent face tracking for stable green squares."""
     global face_tracking
     
     annotated = frame.copy()
-    results = analyze_frame(frame)
+    results = analyze_frame(frame, skip_frame_check=force_process)
     current_time = time.time()
 
     # Update face tracking with current detections
@@ -804,7 +804,7 @@ def capture_snapshot(output_path: Optional[str] = None) -> None:
         print("[ERROR] Failed to grab frame from camera.")
         return
 
-    annotated, results = annotate_frame(frame)
+    annotated, results = annotate_frame(frame, force_process=True)
 
     if not results:
         print("[INFO] No face detected in frame.")
