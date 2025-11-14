@@ -258,6 +258,9 @@ class YahboomRaspbotInterface(HardwareInterface):
             if self.camera_type == 'picamera2':
                 # Pi Camera 2 returns numpy array directly
                 frame = self.camera.capture_array()
+                if frame is not None and frame.ndim == 3:
+                    # picamera2 delivers RGB, convert to BGR for OpenCV consistency
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 return frame
             else:
                 # OpenCV VideoCapture
