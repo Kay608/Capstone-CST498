@@ -389,10 +389,17 @@ def manual_status():
     if not _authorize_manual_request(request):
         return jsonify({'error': 'Unauthorized'}), 401
     interface = _get_manual_interface()
-    return jsonify({
+    payload = {
         'available': bool(interface and interface.is_available()),
         'token_required': bool(MANUAL_CONTROL_TOKEN),
-    })
+    }
+    if interface and interface.is_available():
+        with suppress(Exception):
+            payload['encoders'] = interface.get_encoder_ticks()
+        gps_data = controller.localization.get_gps() if hasattr(controller, 'localization') else None
+        if gps_data:
+            payload['gps'] = gps_data
+    return jsonify(payload)
 
 
 @app.route('/api/manual/move', methods=['POST'])
@@ -455,6 +462,35 @@ def manual_stop():
         return jsonify({'error': str(exc)}), 500
 
     return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/manual/camera', methods=['POST'])
+def manual_camera():
+    if not _authorize_manual_request(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    payload = request.get_json(silent=True) or {}
+    angle = payload.get('angle')
+    try:
+        if angle is None:
+            raise ValueError('Missing angle')
+        angle_value = int(float(angle))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid angle value'}), 400
+
+    angle_value = max(0, min(180, angle_value))
+
+    interface = _get_manual_interface()
+    if not interface or not interface.is_available():
+        return jsonify({'error': 'Robot hardware not available'}), 503
+
+    try:
+        interface.set_camera_servo(angle_value)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Manual camera control failed: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+    return jsonify({'status': 'ok', 'angle': angle_value})
 
 # --- Navigation Endpoints ---
 def navigation_thread(goal):
