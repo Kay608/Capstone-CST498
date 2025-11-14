@@ -113,3 +113,41 @@ class YB_Pcb_Car(object):
             self.write_array(reg, data)
         except:
             print ('Ctrl_Servo I2C error') 
+
+    def Ctrl_Buzzer(self, frequency, duration):
+        """
+        Control the buzzer on the Yahboom Raspbot.
+        
+        Args:
+            frequency (int): Frequency of the buzz (0-255, higher = higher pitch)
+            duration (int): Duration in milliseconds (0-65535)
+        """
+        try:
+            reg = 0x04  # Typical buzzer register for Yahboom robots
+            # Convert duration from milliseconds to appropriate format (divide by 10 for timing)
+            duration_val = min(255, max(0, duration // 10))
+            frequency_val = min(255, max(0, frequency))
+            data = [frequency_val, duration_val]
+            self.write_array(reg, data)
+        except:
+            print('Ctrl_Buzzer I2C error')
+    
+    def Buzz_Short(self):
+        """Play a short recognition buzz sound."""
+        self.Ctrl_Buzzer(200, 200)  # Medium frequency, 200ms duration
+    
+    def Buzz_Success(self):
+        """Play a success pattern buzz sound."""
+        self.Ctrl_Buzzer(150, 100)   # Lower pitch, short
+        time.sleep(0.15)
+        self.Ctrl_Buzzer(200, 100)   # Medium pitch, short  
+        time.sleep(0.15)
+        self.Ctrl_Buzzer(250, 150)   # Higher pitch, longer
+    
+    def Buzz_Alert(self):
+        """Play an alert/warning buzz sound."""
+        self.Ctrl_Buzzer(255, 100)   # High pitch, short
+        time.sleep(0.1)
+        self.Ctrl_Buzzer(255, 100)   # High pitch, short
+        time.sleep(0.1)
+        self.Ctrl_Buzzer(255, 200)   # High pitch, longer 

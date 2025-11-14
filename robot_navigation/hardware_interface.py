@@ -236,6 +236,11 @@ class YahboomRaspbotInterface(HardwareInterface):
     
     def is_available(self) -> bool:
         return self.available
+    
+    @property
+    def robot(self):
+        """Access to the underlying YB_Pcb_Car object for direct hardware control."""
+        return self.car
 
 class SimulatedRaspbotInterface(HardwareInterface):
     """Simulated hardware interface for development without physical robot"""
@@ -341,10 +346,34 @@ class SimulatedRaspbotInterface(HardwareInterface):
     def is_available(self) -> bool:
         return True
     
+    @property 
+    def robot(self):
+        """Simulated robot object with buzzer methods for testing."""
+        return SimulatedBuzzer()
+    
     def get_position(self) -> Tuple[float, float, float]:
         """Get current simulated position (x, y, theta) - for debugging only"""
         import math
         return (self.x, self.y, math.degrees(self.theta))
+
+class SimulatedBuzzer:
+    """Simulated buzzer for testing without hardware."""
+    
+    def Buzz_Short(self):
+        """Simulate short buzz."""
+        print("[SIMULATED BUZZER] Short buzz: BEEP!")
+    
+    def Buzz_Success(self):
+        """Simulate success pattern buzz."""
+        print("[SIMULATED BUZZER] Success pattern: BEEP-beep-BEEEP!")
+    
+    def Buzz_Alert(self):
+        """Simulate alert pattern buzz."""
+        print("[SIMULATED BUZZER] Alert pattern: BEEP-BEEP-BEEEEP!")
+    
+    def Ctrl_Buzzer(self, frequency, duration):
+        """Simulate custom buzzer control."""
+        print(f"[SIMULATED BUZZER] Custom buzz: {frequency}Hz for {duration}ms")
 
 def create_hardware_interface(use_simulation: bool = True, use_picamera: bool = True) -> HardwareInterface:
     """

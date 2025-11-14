@@ -48,7 +48,8 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 DB_NAME = os.environ.get('DB_NAME')
 
 # --- Flask App Configuration for Remote Logging ---
-FLASK_APP_URL = os.environ.get('FLASK_APP_URL', 'http://localhost:5001')  # Default to localhost:5001
+# Flask app URL for logging verifications
+FLASK_APP_URL = "http://10.202.65.203:5001"
 
 # --- Recognition Configuration ---
 MATCH_THRESHOLD = 0.65
@@ -636,6 +637,17 @@ def robot_action_on_recognition(result: dict) -> None:
     
     try:
         print(f"[ROBOT] Unlocking compartment for {result['name']}")
+        
+        # Play success buzz sound for face recognition
+        try:
+            if hasattr(robot_interface, 'robot') and robot_interface.robot:
+                print("[ROBOT] Playing recognition success sound")
+                robot_interface.robot.Buzz_Success()  # Play success pattern
+            else:
+                print("[ROBOT] Robot buzzer not available - sound skipped")
+        except Exception as e:
+            print(f"[ROBOT] Buzzer error: {e}")
+        
         # Center camera on face for confirmation
         robot_interface.set_camera_servo(90)  # Center position
         time.sleep(0.5)
@@ -720,6 +732,13 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
                 if result["matched"] and (current_time - last_recognition_time) > recognition_cooldown:
                     print(f"[ACCESS GRANTED] Recognized: {result['name']} ({result['confidence']:.2f})")
                     
+                    # Log verification to Flask app via HTTP
+                    log_verification_http(result["name"], True, result["confidence"], "Raspberry Pi")
+                    
+                    # Process order fulfillment if we have a banner_id
+                    if result["banner_id"]:
+                        process_order_fulfillment(result["banner_id"], result["name"])
+                    
                     # Execute robot actions
                     robot_action_on_recognition(result)
                     
@@ -734,6 +753,19 @@ def run_camera_loop(headless=False, use_robot=False, callback: Optional[Callable
                     # Only log unrecognized if we have faces in DB
                     if (current_time - last_recognition_time) > recognition_cooldown:
                         print(f"[ACCESS DENIED] Face not recognized (confidence {result['confidence']:.2f})")
+                        
+                        # Play alert sound for unrecognized face
+                        try:
+                            if robot_interface and robot_interface.is_available() and hasattr(robot_interface, 'robot') and robot_interface.robot:
+                                print("[ROBOT] Playing access denied sound")
+                                robot_interface.robot.Buzz_Alert()  # Play alert pattern for denied access
+                            else:
+                                print("[ROBOT] Robot buzzer not available for access denied sound")
+                        except Exception as e:
+                            print(f"[ROBOT] Buzzer error on access denied: {e}")
+                        
+                        # Log failed verification to Flask app via HTTP
+                        log_verification_http("Unknown", False, result["confidence"], "Raspberry Pi")
             
             # Display frame (only if not headless)
             if not headless:
