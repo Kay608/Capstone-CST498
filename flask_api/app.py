@@ -8,6 +8,7 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import Optional
+from contextlib import suppress
 import pymysql
 from io import BytesIO
 import numpy as np

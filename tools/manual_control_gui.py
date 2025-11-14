@@ -48,7 +48,8 @@ class ManualController(tk.Tk):
         ttk.Entry(ssh_frame, textvariable=self.ssh_user, width=12).grid(row=0, column=3, padx=6, pady=4)
         ttk.Label(ssh_frame, text="Password").grid(row=1, column=0, sticky="w", padx=6, pady=4)
         ttk.Entry(ssh_frame, textvariable=self.ssh_password, show="*", width=16).grid(row=1, column=1, padx=6, pady=4)
-        ttk.Button(ssh_frame, text="Start API", command=self._start_remote_api).grid(row=0, column=4, rowspan=2, padx=6, pady=4)
+        ttk.Button(ssh_frame, text="Start API", command=self._start_remote_api).grid(row=0, column=4, padx=6, pady=4)
+        ttk.Button(ssh_frame, text="Stop API", command=self._stop_remote_api).grid(row=1, column=4, padx=6, pady=4)
 
         sliders = ttk.LabelFrame(self, text="Command Settings")
         sliders.pack(fill="x", padx=10, pady=8)
@@ -173,6 +174,33 @@ class ManualController(tk.Tk):
                 else:
                     error_output = stderr.read().decode().strip()
                     self._log(f"⚠️ Remote start failed: {error_output or 'exit code ' + str(exit_code)}")
+            except Exception as exc:
+                self._log(f"⚠️ SSH error: {exc}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _stop_remote_api(self):
+        def worker():
+            host = self.ssh_host.get().strip()
+            user = self.ssh_user.get().strip() or 'root1'
+            password = self.ssh_password.get()
+            if not host:
+                self._log("⚠️ SSH host is required")
+                return
+            self._log(f"Stopping API on {host}...")
+            try:
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(hostname=host, username=user, password=password, timeout=10)
+                remote_cmd = (
+                    "bash -lc 'pkill -f "
+                    """flask_api/app.py"""" "
+                    "|| pkill -f \"python app.py\"'"
+                )
+                stdin, stdout, stderr = client.exec_command(remote_cmd)
+                stdout.channel.recv_exit_status()
+                client.close()
+                self._log("✅ Flask API stop signal sent")
             except Exception as exc:
                 self._log(f"⚠️ SSH error: {exc}")
 
