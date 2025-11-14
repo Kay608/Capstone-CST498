@@ -19,6 +19,10 @@ load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+PYTHON_CODES_DIR = BASE_DIR / "python codes"
+if PYTHON_CODES_DIR.exists() and str(PYTHON_CODES_DIR) not in sys.path:
+    sys.path.insert(0, str(PYTHON_CODES_DIR))
+
 from flask import Flask, request, jsonify, render_template
 from robot_navigation.robot_controller import RobotController
 from robot_navigation.hardware_interface import create_hardware_interface, HardwareInterface
