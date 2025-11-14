@@ -26,6 +26,11 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env", override=False)
 load_dotenv(BASE_DIR / "flask_api" / ".env", override=False)
+
+# Ensure project root modules are importable when running from nested directories
+PROJECT_ROOT = BASE_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 try:
     from picamera2 import Picamera2
     PICAMERA_AVAILABLE = True
@@ -349,7 +354,7 @@ refresh_known_faces()
 
 def match_face_encoding(encoding):
     if not known_encodings:
-        return "Unknown", False, 0.0
+        return "Unknown", False, 0.0, None
 
     distances = face_recognition.face_distance(known_encodings, encoding)
     min_distance = float(min(distances))
