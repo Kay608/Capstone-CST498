@@ -31,6 +31,9 @@ load_dotenv(BASE_DIR / "flask_api" / ".env", override=False)
 PROJECT_ROOT = BASE_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load any credentials stored at the repository root (common on the Pi deployment)
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 try:
     from picamera2 import Picamera2
     PICAMERA_AVAILABLE = True
