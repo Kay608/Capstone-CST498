@@ -19,7 +19,15 @@ load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from flask import Flask, request, jsonify, render_template
-from robot_navigation.robot_controller import RobotController
+# Import robot controller with fallback for TensorFlow issues
+try:
+    from robot_navigation.robot_controller import RobotController
+    ROBOT_CONTROLLER_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARN] Robot controller not available: {e}")
+    print("[INFO] Running Flask app in minimal mode without robot controller")
+    ROBOT_CONTROLLER_AVAILABLE = False
+    RobotController = None
 from threading import Thread
 import time
 # Optional imports for network discovery
@@ -40,7 +48,11 @@ def _is_truthy(value: str) -> bool:
 
 app = Flask(__name__)
 # Use simulation mode by default - change to False when deploying to real robot
-controller = RobotController(use_simulation=True)
+if ROBOT_CONTROLLER_AVAILABLE:
+    controller = RobotController(use_simulation=True)
+else:
+    controller = None
+    print("[INFO] Flask app running without robot controller - face recognition and admin panel still available")
 
 # Respect FLASK_DEBUG when the app is executed directly
 _debug_env = os.environ.get('FLASK_DEBUG', '1')
@@ -353,6 +365,11 @@ orders = []
 
 # --- Navigation Endpoints ---
 def navigation_thread(goal):
+    if not controller:
+        status['state'] = 'robot_unavailable'
+        status['last_update'] = time.time()
+        return
+        
     status['state'] = 'navigating'
     status['last_goal'] = goal
     status['last_update'] = time.time()
@@ -383,9 +400,16 @@ def set_goal():
 def get_status():
     # Add robot coordinates if available
     coords = None
-    if hasattr(controller.localization.state, 'x') and hasattr(controller.localization.state, 'y'):
-        coords = {'x': controller.localization.state.x, 'y': controller.localization.state.y}
-    gps = controller.localization.get_gps()
+    gps = None
+    
+    if controller and hasattr(controller, 'localization'):
+        try:
+            if hasattr(controller.localization.state, 'x') and hasattr(controller.localization.state, 'y'):
+                coords = {'x': controller.localization.state.x, 'y': controller.localization.state.y}
+            gps = controller.localization.get_gps()
+        except Exception as e:
+            print(f"[WARN] Could not get robot location: {e}")
+    
     return jsonify({
         'state': status['state'],
         'last_goal': status['last_goal'],

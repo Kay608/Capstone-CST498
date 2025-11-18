@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+  #!/usr/bin/env python3
 """
 Integrated Facial Recognition and Traffic Sign Detection System
 =============================================================
@@ -124,22 +124,30 @@ class IntegratedRecognitionSystem:
             return
             
         try:
-            # Load face encodings from database
+            # Load face encodings from JawsDB database
             encodings, names = load_encodings_from_db()
             self.known_encodings = encodings
             
-            # Extract names and banner IDs
+            # Extract names and banner IDs from JawsDB format
             self.known_names = []
             self.known_banner_ids = []
             for name_data in names:
-                if isinstance(name_data, dict):
-                    self.known_names.append(name_data['display_name'])
-                    self.known_banner_ids.append(name_data['banner_id'])
+                if isinstance(name_data, tuple) and len(name_data) == 2:
+                    # JawsDB format: (banner_id, display_name)
+                    banner_id, display_name = name_data
+                    self.known_banner_ids.append(banner_id)
+                    self.known_names.append(display_name)
+                elif isinstance(name_data, dict):
+                    # Legacy format support
+                    self.known_names.append(name_data.get('display_name', 'Unknown'))
+                    self.known_banner_ids.append(name_data.get('banner_id', 'unknown'))
                 else:
+                    # Fallback for other formats
                     self.known_names.append(str(name_data))
                     self.known_banner_ids.append("unknown")
             
-            logger.info(f"Loaded {len(self.known_encodings)} face encodings")
+            logger.info(f"Loaded {len(self.known_encodings)} face encodings from JawsDB")
+            logger.info(f"Known faces: {[name for name in self.known_names]}")
             
         except Exception as e:
             logger.error(f"Failed to initialize facial recognition: {e}")
@@ -228,7 +236,8 @@ class IntegratedRecognitionSystem:
                 matched = min_distance <= MATCH_THRESHOLD
                 confidence = 1.0 - min_distance
                 
-                name = self.known_names[min_distance_idx] if matched else "Unknown"
+                # Always use display name for showing on screen
+                display_name = self.known_names[min_distance_idx] if matched else "Unknown"
                 banner_id = self.known_banner_ids[min_distance_idx] if matched else None
                 
                 # Scale back to original frame size
@@ -239,7 +248,7 @@ class IntegratedRecognitionSystem:
                 left = int(left / self.FRAME_SCALE)
                 
                 results.append({
-                    "name": name,
+                    "name": display_name,  # Use display name for screen display
                     "matched": matched,
                     "box": (top, right, bottom, left),
                     "confidence": confidence,
@@ -324,7 +333,7 @@ class IntegratedRecognitionSystem:
                 tracked_face.get('banner_id') and
                 (current_time - self.last_recognition_time) > self.recognition_cooldown):
                 
-                logger.info(f"[ACCESS GRANTED] Recognized: {tracked_face['name']} ({tracked_face['confidence']:.2f})")
+                logger.info(f"[ACCESS GRANTED] Recognized: {tracked_face['name']} (Banner ID: {tracked_face['banner_id']}) - Confidence: {tracked_face['confidence']:.2f}")
                 
                 # Log verification via HTTP
                 try:
@@ -352,7 +361,7 @@ class IntegratedRecognitionSystem:
             return
         
         try:
-            logger.info(f"[ROBOT] Unlocking compartment for {face_data['name']}")
+            logger.info(f"[ROBOT] Unlocking compartment for {face_data['name']} (Banner ID: {face_data.get('banner_id', 'Unknown')})")
             
             # Play success buzz sound
             if hasattr(self.robot_interface, 'robot') and self.robot_interface.robot:
@@ -435,10 +444,11 @@ class IntegratedRecognitionSystem:
         # Add system status
         face_count = len(self.face_tracking) if self.enable_face_recognition else 0
         sign_count = len(sign_results) if self.enable_sign_detection else 0
+        known_faces_count = len(self.known_encodings) if self.enable_face_recognition else 0
         
         status_lines = [
-            f"👤 Faces: {face_count} | 🛑 Signs: {sign_count}",
-            f"Face DB: {len(self.known_encodings)} | Flask: {FLASK_APP_URL.split('/')[-1] if FACIAL_RECOGNITION_AVAILABLE else 'N/A'}"
+            f"👤 Active Faces: {face_count} | 🛑 Signs: {sign_count}",
+            f"👥 Known Faces: {known_faces_count} | 🌐 Flask: {FLASK_APP_URL.split('/')[-1] if FACIAL_RECOGNITION_AVAILABLE else 'N/A'}"
         ]
         
         for i, line in enumerate(status_lines):
@@ -484,7 +494,8 @@ class IntegratedRecognitionSystem:
                     if face_results:
                         for result in face_results:
                             status = "granted" if result["matched"] else "denied"
-                            logger.info(f"Face {status}: {result['name']} ({result['confidence']:.2f})")
+                            banner_info = f" (Banner ID: {result.get('banner_id', 'N/A')})" if result.get('banner_id') else ""
+                            logger.info(f"Face {status}: {result['name']}{banner_info} - Confidence: {result['confidence']:.2f}")
                     
                     if sign_results:
                         for detection in sign_results:

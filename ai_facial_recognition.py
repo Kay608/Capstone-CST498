@@ -49,7 +49,17 @@ DB_NAME = os.environ.get('DB_NAME')
 
 # --- Flask App Configuration for Remote Logging ---
 # Flask app URL for logging verifications
-FLASK_APP_URL = "http://10.202.65.203:5001"
+# Try localhost first, fallback to specific IP if needed
+FLASK_APP_URL = os.environ.get('FLASK_APP_URL', "http://localhost:5001")
+
+# Alternative URLs to try if primary fails
+ALTERNATIVE_FLASK_URLS = [
+    "http://localhost:5001",
+    "http://127.0.0.1:5001",
+    "http://localhost:5000",
+    "http://127.0.0.1:5000",
+    "http://10.202.65.203:5001"  # Original IP
+]
 
 # --- Recognition Configuration ---
 MATCH_THRESHOLD = 0.65
@@ -505,74 +515,99 @@ def annotate_frame(frame, force_process: bool = False):
 def log_verification_http(name, matched, confidence, location=None):
     """
     Log verification to Flask app via HTTP request.
-    Falls back gracefully if Flask app is not reachable.
+    Tries multiple Flask URLs if the primary one fails.
     """
-    try:
-        print(f"[HTTP] Attempting to log verification to {FLASK_APP_URL}/api/log_verification")
-        print(f"[HTTP] Data: name={name}, matched={matched}, confidence={confidence}")
-        
-        data = {
-            'name': name,
-            'matched': matched,
-            'confidence': confidence,
-            'location': location or 'Raspberry Pi'
-        }
-        
-        response = requests.post(
-            f"{FLASK_APP_URL}/api/log_verification",
-            json=data,
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            print(f"[HTTP] ✅ Logged verification: {name} ({'✓' if matched else '✗'})")
-        else:
-            print(f"[HTTP] ❌ Failed to log verification: HTTP {response.status_code}")
+    global FLASK_APP_URL
+    urls_to_try = [FLASK_APP_URL] + [url for url in ALTERNATIVE_FLASK_URLS if url != FLASK_APP_URL]
+    
+    for attempt, url in enumerate(urls_to_try, 1):
+        try:
+            print(f"[HTTP] Attempt {attempt}: Logging verification to {url}/api/log_verification")
+            print(f"[HTTP] Data: name={name}, matched={matched}, confidence={confidence}")
             
-    except requests.exceptions.RequestException as e:
-        print(f"[HTTP] ❌ Could not reach Flask app for logging: {e}")
-    except Exception as e:
-        print(f"[ERROR] Verification logging error: {e}")
+            data = {
+                'name': name,
+                'matched': matched,
+                'confidence': confidence,
+                'location': location or 'Raspberry Pi'
+            }
+            
+            response = requests.post(
+                f"{url}/api/log_verification",
+                json=data,
+                timeout=3  # Shorter timeout for faster fallback
+            )
+            
+            if response.status_code == 200:
+                print(f"[HTTP] ✅ Logged verification to {url}: {name} ({'✓' if matched else '✗'})")
+                # Update working URL for future use
+                FLASK_APP_URL = url
+                return True
+            else:
+                print(f"[HTTP] ❌ HTTP {response.status_code} from {url}")
+                
+        except requests.exceptions.RequestException as e:
+            print(f"[HTTP] ❌ Connection failed to {url}: {e}")
+            if attempt < len(urls_to_try):
+                print(f"[HTTP] 🔄 Trying next URL...")
+            continue
+        except Exception as e:
+            print(f"[ERROR] Verification logging error with {url}: {e}")
+            continue
+    
+    print(f"[HTTP] ❌ All Flask URLs failed. Verification logged locally only.")
+    return False
 
 
 def process_order_fulfillment(banner_id, display_name):
     """
     Check for pending orders and mark as fulfilled when face is recognized.
+    Tries multiple Flask URLs if the primary one fails.
     """
-    try:
-        print(f"[HTTP] Processing order fulfillment for {display_name} ({banner_id})")
-        print(f"[HTTP] Sending request to {FLASK_APP_URL}/api/process_order")
-        
-        data = {
-            'banner_id': banner_id,
-            'action': 'fulfill'
-        }
-        
-        response = requests.post(
-            f"{FLASK_APP_URL}/api/process_order",
-            json=data,
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get('order_fulfilled'):
-                print(f"[HTTP] ✅ Order fulfilled for {display_name} ({banner_id})")
-                print(f"[HTTP] Items: {result.get('items', 'N/A')}")
-                return True
-            else:
-                print(f"[ORDER] No pending orders found for {banner_id}")
-                return False
-        else:
-            print(f"[WARN] Failed to process order: HTTP {response.status_code}")
-            return False
+    global FLASK_APP_URL
+    urls_to_try = [FLASK_APP_URL] + [url for url in ALTERNATIVE_FLASK_URLS if url != FLASK_APP_URL]
+    
+    for attempt, url in enumerate(urls_to_try, 1):
+        try:
+            print(f"[HTTP] Attempt {attempt}: Processing order fulfillment for {display_name} ({banner_id})")
+            print(f"[HTTP] Sending request to {url}/api/process_order")
             
-    except requests.exceptions.RequestException as e:
-        print(f"[WARN] Could not reach Flask app for order processing: {e}")
-        return False
-    except Exception as e:
-        print(f"[ERROR] Order processing error: {e}")
-        return False
+            data = {
+                'banner_id': banner_id,
+                'action': 'fulfill'
+            }
+            
+            response = requests.post(
+                f"{url}/api/process_order",
+                json=data,
+                timeout=3  # Shorter timeout for faster fallback
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('order_fulfilled'):
+                    print(f"[HTTP] ✅ Order fulfilled for {display_name} ({banner_id}) via {url}")
+                    print(f"[HTTP] Items: {result.get('items', 'N/A')}")
+                    # Update working URL for future use
+                    FLASK_APP_URL = url
+                    return True
+                else:
+                    print(f"[ORDER] No pending orders found for {banner_id} via {url}")
+                    return False
+            else:
+                print(f"[HTTP] ❌ HTTP {response.status_code} from {url}")
+                
+        except requests.exceptions.RequestException as e:
+            print(f"[HTTP] ❌ Connection failed to {url}: {e}")
+            if attempt < len(urls_to_try):
+                print(f"[HTTP] 🔄 Trying next URL...")
+            continue
+        except Exception as e:
+            print(f"[ERROR] Order fulfillment error with {url}: {e}")
+            continue
+    
+    print(f"[HTTP] ❌ All Flask URLs failed. Order could not be processed.")
+    return False
 
 
 def recognize_face(location=None, use_robot_camera=False):
