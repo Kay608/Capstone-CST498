@@ -7,6 +7,8 @@ import sys
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from typing import Optional
+from contextlib import suppress
 import pymysql
 from io import BytesIO
 import numpy as np
@@ -18,16 +20,24 @@ load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+PYTHON_CODES_DIR = BASE_DIR / "python codes"
+if PYTHON_CODES_DIR.exists() and str(PYTHON_CODES_DIR) not in sys.path:
+    sys.path.insert(0, str(PYTHON_CODES_DIR))
+
 from flask import Flask, request, jsonify, render_template
+
 # Import robot controller with fallback for TensorFlow issues
 try:
     from robot_navigation.robot_controller import RobotController
+    from robot_navigation.hardware_interface import create_hardware_interface, HardwareInterface
     ROBOT_CONTROLLER_AVAILABLE = True
 except ImportError as e:
     print(f"[WARN] Robot controller not available: {e}")
     print("[INFO] Running Flask app in minimal mode without robot controller")
     ROBOT_CONTROLLER_AVAILABLE = False
     RobotController = None
+    create_hardware_interface = None
+    HardwareInterface = None
 from threading import Thread
 import time
 # Optional imports for network discovery
@@ -60,6 +70,32 @@ _run_debug_mode = _is_truthy(_debug_env)
 
 # Track high-level robot state for status endpoint; initialized here so gunicorn workers inherit it
 status = {'state': 'idle', 'last_goal': None, 'last_update': time.time()}
+
+MANUAL_CONTROL_TOKEN = os.environ.get("RC_CONTROL_TOKEN", "")
+# Manual control interface (lazily initialized for testing)
+_manual_interface = None
+
+
+def _authorize_manual_request(req) -> bool:
+    if not MANUAL_CONTROL_TOKEN:
+        return True
+    provided = req.headers.get("X-Api-Key") or req.args.get("api_key")
+    return provided == MANUAL_CONTROL_TOKEN
+
+
+def _get_manual_interface():
+    global _manual_interface
+    if _manual_interface and _manual_interface.is_available():
+        return _manual_interface
+    try:
+        candidate = create_hardware_interface(use_simulation=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Failed to initialize manual control hardware: {exc}")
+        return None
+    if candidate.is_available():
+        _manual_interface = candidate
+        return _manual_interface
+    return None
 
 # --- JawsDB (MySQL) Configuration ---
 # Hardcoded values for testing
@@ -362,6 +398,116 @@ with app.app_context():
 
 
 orders = []
+
+
+# --- Manual RC Control Endpoints ---
+@app.route('/api/manual/status', methods=['GET'])
+def manual_status():
+    if not _authorize_manual_request(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+    interface = _get_manual_interface()
+    payload = {
+        'available': bool(interface and interface.is_available()),
+        'token_required': bool(MANUAL_CONTROL_TOKEN),
+    }
+    if interface and interface.is_available():
+        with suppress(Exception):
+            payload['encoders'] = interface.get_encoder_ticks()
+        gps_data = controller.localization.get_gps() if hasattr(controller, 'localization') else None
+        if gps_data:
+            payload['gps'] = gps_data
+    return jsonify(payload)
+
+
+@app.route('/api/manual/move', methods=['POST'])
+def manual_move():
+    if not _authorize_manual_request(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    payload = request.get_json(silent=True) or {}
+    direction = (payload.get('direction') or '').lower()
+    speed = payload.get('speed', 0.4)
+    duration = payload.get('duration', 0.5)
+    angle = payload.get('angle', 90.0)
+
+    try:
+        speed = max(0.0, min(1.0, float(speed)))
+        duration = max(0.0, float(duration))
+        angle = max(0.0, float(angle))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid speed, duration, or angle value'}), 400
+
+    interface = _get_manual_interface()
+    if not interface or not interface.is_available():
+        return jsonify({'error': 'Robot hardware not available'}), 503
+
+    direction_map = {
+        'forward': lambda: interface.move_forward(speed, duration),
+        'back': lambda: interface.move_backward(speed, duration),
+        'backward': lambda: interface.move_backward(speed, duration),
+        'reverse': lambda: interface.move_backward(speed, duration),
+        'left': lambda: interface.turn_left(speed, angle if angle > 0 else 90.0),
+        'right': lambda: interface.turn_right(speed, angle if angle > 0 else 90.0),
+    }
+
+    command = direction_map.get(direction)
+    if not command:
+        return jsonify({'error': 'Unknown direction'}), 400
+
+    try:
+        command()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Manual move failed: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+    return jsonify({'status': 'ok', 'direction': direction, 'speed': speed, 'duration': duration, 'angle': angle})
+
+
+@app.route('/api/manual/stop', methods=['POST'])
+def manual_stop():
+    if not _authorize_manual_request(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    interface = _get_manual_interface()
+    if not interface or not interface.is_available():
+        return jsonify({'error': 'Robot hardware not available'}), 503
+
+    try:
+        interface.stop()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Manual stop failed: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/manual/camera', methods=['POST'])
+def manual_camera():
+    if not _authorize_manual_request(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    payload = request.get_json(silent=True) or {}
+    angle = payload.get('angle')
+    try:
+        if angle is None:
+            raise ValueError('Missing angle')
+        angle_value = int(float(angle))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid angle value'}), 400
+
+    angle_value = max(0, min(180, angle_value))
+
+    interface = _get_manual_interface()
+    if not interface or not interface.is_available():
+        return jsonify({'error': 'Robot hardware not available'}), 503
+
+    try:
+        interface.set_camera_servo(angle_value)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Manual camera control failed: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+    return jsonify({'status': 'ok', 'angle': angle_value})
 
 # --- Navigation Endpoints ---
 def navigation_thread(goal):
