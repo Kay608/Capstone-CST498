@@ -16,7 +16,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ai_facial_recognition import load_encodings_from_db, save_encodings_cache, load_encodings_cache, BASE_DIR
+from recognition_core import load_encodings_from_db, save_encodings_cache, load_encodings_cache, BASE_DIR
 
 
 def sync_encodings():

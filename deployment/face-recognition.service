@@ -9,7 +9,7 @@ User=pi
 Group=pi
 WorkingDirectory=/home/pi/Capstone-CST498
 Environment="PATH=/home/pi/Capstone-CST498/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-ExecStart=/home/pi/Capstone-CST498/.venv/bin/python ai_facial_recognition.py --headless --robot --model hog --offline
+ExecStart=/home/pi/Capstone-CST498/.venv/bin/python integrated_recognition_system.py --headless --no-signs --robot --cache-first
 Restart=always
 RestartSec=10
 StandardOutput=journal

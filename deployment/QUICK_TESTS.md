@@ -6,12 +6,12 @@
 ```bash
 .venv\Scripts\activate  # Windows
 source .venv/bin/activate  # Mac/Linux
-python ai_facial_recognition.py
+python integrated_recognition_system.py --no-signs
 ```
 
-### Test snapshot mode
+### Capture snapshot for poster assets
 ```bash
-python ai_facial_recognition.py --snapshot --output test.jpg
+python tools/sim_harness.py  # Use "Capture Face Snapshot" button
 ```
 
 ## Raspberry Pi Testing
@@ -19,35 +19,17 @@ python ai_facial_recognition.py --snapshot --output test.jpg
 ### Test with display attached
 ```bash
 source .venv/bin/activate
-python ai_facial_recognition.py
+python integrated_recognition_system.py --no-signs
 ```
 
 ### Test headless (no display)
 ```bash
-python ai_facial_recognition.py --headless
+python integrated_recognition_system.py --headless --no-signs
 ```
 
 ### Test with robot integration
 ```bash
-python ai_facial_recognition.py --headless --robot
-```
-
-### Test with different models
-```bash
-# Fast (HOG - recommended for Pi)
-python ai_facial_recognition.py --headless --robot --model hog
-
-# Accurate (CNN - requires good CPU/GPU)
-python ai_facial_recognition.py --headless --robot --model cnn
-```
-
-### Adjust sensitivity
-```bash
-# More strict (fewer false positives)
-python ai_facial_recognition.py --headless --robot --threshold 0.7
-
-# More lenient (more matches)
-python ai_facial_recognition.py --headless --robot --threshold 0.5
+python integrated_recognition_system.py --headless --no-signs --robot
 ```
 
 ## Service Management
@@ -109,7 +91,7 @@ python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('DB c
 
 ### Load face encodings test
 ```bash
-python -c "from ai_facial_recognition import load_encodings_from_db; e,n = load_encodings_from_db(); print(f'Loaded {len(n)} faces')"
+python -c "from recognition_core import load_encodings_from_db; e,n = load_encodings_from_db(); print(f'Loaded {len(n)} faces')"
 ```
 
 ### Check Python packages

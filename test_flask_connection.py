@@ -63,8 +63,8 @@ def test_flask_connection():
         for url in working_urls:
             print(f"   🌐 {url}")
         
-        print(f"\\n🔧 To fix ai_facial_recognition.py:")
-        print(f'   Update FLASK_APP_URL = "{working_urls[0]}"')
+            print(f"\\n🔧 To update recognition_core.py:")
+            print(f'   Set FLASK_APP_URL = "{working_urls[0]}"')
         
     else:
         print("❌ No working Flask URLs found!")

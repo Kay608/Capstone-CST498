@@ -6,14 +6,15 @@ Senior capstone project for CST 498 at NC A&T State University. The goal is a co
 ## Current Architecture
 
 - **Flask API (`flask_api/app.py`)**: Central backend that exposes enrollment (`/enroll`, `/register_face`), navigation, and status endpoints. Face encodings are persisted in a MySQL table (`users`) hosted on JawsDB. When run locally, it defaults to simulated robot hardware.
-- **Robot stack (`robot_navigation/*`, `ai_facial_recognition.py`)**: Runs on the Yahboom Raspbot (Raspberry Pi). Uses OpenCV/face_recognition to match users, integrates with navigation/pathfinding modules, and now bundles Mary's MobileNetV2 traffic-sign classifier (`robot_navigation/sign_recognition`).
+- **Robot stack (`robot_navigation/*`, `recognition_core.py`, `integrated_recognition_system.py`)**: Runs on the Yahboom Raspbot (Raspberry Pi). Uses OpenCV/face_recognition to match users, integrates with navigation/pathfinding modules, and now bundles Mary's MobileNetV2 traffic-sign classifier (`robot_navigation/sign_recognition`).
 - **Enrollment UI (`/flask_api/templates/enroll.html`)**: Simple HTML form rendered by Flask so teammates can upload images without CLI tooling.
 
 ## Key Files (top-level)
 
 - `flask_api/app.py` – Unified REST API and enrollment UI.
 - `flask_api/templates/enroll.html` – Browser enrollment form.
-- `ai_facial_recognition.py` – Loads encodings from MySQL for live recognition on the robot.
+- `recognition_core.py` – Shared facial-recognition utilities used by the integrated system and tooling.
+- `integrated_recognition_system.py` – Unified facial recognition + traffic sign detection runtime.
 - `robot_navigation/` – Localization, pathfinding, and hardware abstractions.
 - `robot_navigation/sign_recognition/` – MobileNetV2 wrapper for traffic-sign inference (place `mobilenetv2.h5` under `model/`).
 - `requirements.txt` – Python dependencies (includes `gunicorn` for Heroku and `waitress` for Windows parity testing).
@@ -60,10 +61,7 @@ Senior capstone project for CST 498 at NC A&T State University. The goal is a co
     ```powershell
     python tools\sim_harness.py
     ```
-- Capture an annotated facial-recognition snapshot (helpful for poster assets). Omit `--output` if you just want the preview window:
-    ```powershell
-    python ai_facial_recognition.py --snapshot --output poster_assets\face_demo.png
-    ```
+- Capture an annotated facial-recognition snapshot from the harness (`Capture Face Snapshot` button). The annotated frame opens in a popup for quick review.
 
 ## Database Access (JawsDB / MySQL Workbench)
 

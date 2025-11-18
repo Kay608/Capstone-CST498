@@ -17,11 +17,11 @@ Features:
 """
 
 import cv2
-import numpy as np
 import time
 import os
 import sys
 import argparse
+import threading
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Callable
 import logging
@@ -32,15 +32,13 @@ sys.path.append('.')
 
 # Core imports
 try:
-    from ai_facial_recognition import (
-        load_encodings_from_db, 
-        get_db_connection, 
+    from recognition_core import (
         log_verification_http,
         process_order_fulfillment,
-        create_hardware_interface,
         FLASK_APP_URL,
         FACE_DETECTION_MODEL,
-        MATCH_THRESHOLD
+        MATCH_THRESHOLD,
+        FaceRecognitionEngine
     )
     FACIAL_RECOGNITION_AVAILABLE = True
 except ImportError as e:
@@ -48,18 +46,17 @@ except ImportError as e:
     FACIAL_RECOGNITION_AVAILABLE = False
 
 try:
+    from robot_navigation.hardware_interface import create_hardware_interface
+except ImportError as e:
+    create_hardware_interface = None  # type: ignore
+    print(f"Warning: Robot hardware interface not available: {e}")
+
+try:
     from sign_recognition import TrafficSignDetector
     SIGN_DETECTION_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Sign detection not available: {e}")
     SIGN_DETECTION_AVAILABLE = False
-
-try:
-    import face_recognition
-    FACE_LIB_AVAILABLE = True
-except ImportError:
-    print("Warning: face_recognition library not available")
-    FACE_LIB_AVAILABLE = False
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -75,7 +72,8 @@ class IntegratedRecognitionSystem:
                  enable_sign_detection=True,
                  use_robot_hardware=False,
                  confidence_threshold=0.5,
-                 sign_model_path='yolov8n.pt'):
+                 sign_model_path='yolov8n.pt',
+                 cache_first=False):
         """
         Initialize the integrated recognition system.
         
@@ -90,12 +88,11 @@ class IntegratedRecognitionSystem:
         self.enable_sign_detection = enable_sign_detection and SIGN_DETECTION_AVAILABLE
         
         # Initialize components
-        self.known_encodings = []
-        self.known_names = []
-        self.known_banner_ids = []
         self.face_tracking = {}
         self.sign_detector = None
         self.robot_interface = None
+        self.face_engine = None
+        self.cache_first = cache_first
         
         # Timing and persistence settings
         self.FACE_PERSISTENCE_TIME = 3.0
@@ -117,40 +114,26 @@ class IntegratedRecognitionSystem:
         if not self.enable_face_recognition:
             logger.info("Facial recognition disabled")
             return
-            
-        if not FACE_LIB_AVAILABLE:
-            logger.warning("face_recognition library not available - disabling facial recognition")
+
+        if not FACIAL_RECOGNITION_AVAILABLE:
+            logger.warning("Facial recognition utilities unavailable - disabling facial recognition")
             self.enable_face_recognition = False
             return
-            
+
         try:
-            # Load face encodings from JawsDB database
-            encodings, names = load_encodings_from_db()
-            self.known_encodings = encodings
-            
-            # Extract names and banner IDs from JawsDB format
-            self.known_names = []
-            self.known_banner_ids = []
-            for name_data in names:
-                if isinstance(name_data, tuple) and len(name_data) == 2:
-                    # JawsDB format: (banner_id, display_name)
-                    banner_id, display_name = name_data
-                    self.known_banner_ids.append(banner_id)
-                    self.known_names.append(display_name)
-                elif isinstance(name_data, dict):
-                    # Legacy format support
-                    self.known_names.append(name_data.get('display_name', 'Unknown'))
-                    self.known_banner_ids.append(name_data.get('banner_id', 'unknown'))
-                else:
-                    # Fallback for other formats
-                    self.known_names.append(str(name_data))
-                    self.known_banner_ids.append("unknown")
-            
-            logger.info(f"Loaded {len(self.known_encodings)} face encodings from JawsDB")
-            logger.info(f"Known faces: {[name for name in self.known_names]}")
-            
+            self.face_engine = FaceRecognitionEngine(
+                frame_scale=self.FRAME_SCALE,
+                frame_skip=1,
+                detection_model=FACE_DETECTION_MODEL,
+                cache_first=self.cache_first,
+            )
+            known_count = len(self.face_engine.known_encodings)
+            logger.info(f"Loaded {known_count} face encoding(s) from JawsDB")
+            if known_count:
+                logger.info(f"Known faces: {self.face_engine.known_names}")
         except Exception as e:
             logger.error(f"Failed to initialize facial recognition: {e}")
+            self.face_engine = None
             self.enable_face_recognition = False
     
     def _initialize_sign_detection(self, confidence_threshold, model_path):
@@ -177,6 +160,11 @@ class IntegratedRecognitionSystem:
     
     def _initialize_robot_interface(self, use_robot_hardware):
         """Initialize robot hardware interface."""
+        if create_hardware_interface is None:
+            logger.warning("Robot hardware interface not available - robot actions disabled")
+            self.robot_interface = None
+            return
+
         try:
             self.robot_interface = create_hardware_interface(
                 use_simulation=not use_robot_hardware
@@ -209,53 +197,20 @@ class IntegratedRecognitionSystem:
         """
         Analyze frame for faces and return recognition results.
         """
-        if not self.enable_face_recognition or len(self.known_encodings) == 0:
+        if not self.enable_face_recognition or not self.face_engine:
             return []
-        
-        # Resize frame for faster processing
-        small_frame = cv2.resize(frame, (0, 0), fx=self.FRAME_SCALE, fy=self.FRAME_SCALE)
-        rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-        
-        # Find faces
-        face_locations = face_recognition.face_locations(rgb_frame, model=FACE_DETECTION_MODEL)
-        
-        if not face_locations:
-            return []
-        
-        # Get face encodings
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-        
-        results = []
-        for face_encoding, face_location in zip(face_encodings, face_locations):
-            # Compare with known faces
-            distances = face_recognition.face_distance(self.known_encodings, face_encoding)
-            
-            if len(distances) > 0:
-                min_distance_idx = np.argmin(distances)
-                min_distance = distances[min_distance_idx]
-                matched = min_distance <= MATCH_THRESHOLD
-                confidence = 1.0 - min_distance
-                
-                # Always use display name for showing on screen
-                display_name = self.known_names[min_distance_idx] if matched else "Unknown"
-                banner_id = self.known_banner_ids[min_distance_idx] if matched else None
-                
-                # Scale back to original frame size
-                top, right, bottom, left = face_location
-                top = int(top / self.FRAME_SCALE)
-                right = int(right / self.FRAME_SCALE)
-                bottom = int(bottom / self.FRAME_SCALE)
-                left = int(left / self.FRAME_SCALE)
-                
-                results.append({
-                    "name": display_name,  # Use display name for screen display
-                    "matched": matched,
-                    "box": (top, right, bottom, left),
-                    "confidence": confidence,
-                    "banner_id": banner_id,
-                })
-        
-        return results
+
+        engine_results = self.face_engine.analyze_frame(frame, skip_frame_check=True)
+        return [
+            {
+                "name": result.name,
+                "matched": result.matched,
+                "box": result.box,
+                "confidence": result.confidence,
+                "banner_id": result.banner_id,
+            }
+            for result in engine_results
+        ]
     
     def analyze_signs(self, frame):
         """
@@ -334,25 +289,31 @@ class IntegratedRecognitionSystem:
                 (current_time - self.last_recognition_time) > self.recognition_cooldown):
                 
                 logger.info(f"[ACCESS GRANTED] Recognized: {tracked_face['name']} (Banner ID: {tracked_face['banner_id']}) - Confidence: {tracked_face['confidence']:.2f}")
-                
-                # Log verification via HTTP
-                try:
-                    log_verification_http(tracked_face['name'], True, tracked_face['confidence'], "Integrated System")
-                except Exception as e:
-                    logger.error(f"Failed to log verification: {e}")
-                
-                # Process order fulfillment
-                try:
-                    if tracked_face['banner_id']:
-                        process_order_fulfillment(tracked_face['banner_id'], tracked_face['name'])
-                except Exception as e:
-                    logger.error(f"Failed to process order: {e}")
-                
-                # Robot actions (including buzzer)
+                self._dispatch_async_events(tracked_face.copy())
                 self._execute_robot_actions(tracked_face)
                 
                 self.last_recognition_time = current_time
                 break
+
+    def _dispatch_async_events(self, face_data: Dict[str, Any]) -> None:
+        """Handle HTTP callbacks without blocking the video loop."""
+
+        def _worker() -> None:
+            try:
+                log_verification_http(face_data['name'], True, face_data['confidence'], "Integrated System")
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Failed to log verification: {exc}")
+
+            banner_id = face_data.get('banner_id')
+            if not banner_id:
+                return
+
+            try:
+                process_order_fulfillment(banner_id, face_data['name'])
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Failed to process order: {exc}")
+
+        threading.Thread(target=_worker, daemon=True).start()
     
     def _execute_robot_actions(self, face_data):
         """Execute robot actions including buzzer feedback."""
@@ -444,7 +405,10 @@ class IntegratedRecognitionSystem:
         # Add system status
         face_count = len(self.face_tracking) if self.enable_face_recognition else 0
         sign_count = len(sign_results) if self.enable_sign_detection else 0
-        known_faces_count = len(self.known_encodings) if self.enable_face_recognition else 0
+        if self.enable_face_recognition and self.face_engine:
+            known_faces_count = len(self.face_engine.known_encodings)
+        else:
+            known_faces_count = 0
         
         status_lines = [
             f"👤 Active Faces: {face_count} | 🛑 Signs: {sign_count}",
@@ -537,6 +501,7 @@ def parse_args():
     parser.add_argument("--camera", type=int, default=0, help="Camera index (default: 0)")
     parser.add_argument("--confidence", type=float, default=0.5, help="Sign detection confidence threshold")
     parser.add_argument("--sign-model", default="yolov8n.pt", help="Path to YOLO sign detection model")
+    parser.add_argument("--cache-first", action="store_true", help="Load face encodings from cache before querying the database")
     return parser.parse_args()
 
 def main():
@@ -549,7 +514,8 @@ def main():
         enable_sign_detection=not args.no_signs,
         use_robot_hardware=args.robot,
         confidence_threshold=args.confidence,
-        sign_model_path=args.sign_model
+        sign_model_path=args.sign_model,
+        cache_first=args.cache_first
     )
     
     # Run the system

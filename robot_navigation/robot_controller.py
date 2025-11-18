@@ -12,7 +12,10 @@ try:
     from robot_navigation.sign_recognition import TrafficSignClassifier
 except Exception:  # Optional dependency (TensorFlow)
     TrafficSignClassifier = None
-import ai_facial_recognition
+try:
+    from recognition_core import FaceRecognitionEngine
+except ImportError:
+    FaceRecognitionEngine = None  # type: ignore
 import time
 import cv2
 import os
@@ -31,6 +34,13 @@ class RobotController:
         self._use_simulation = use_simulation
         self._fallback_camera = None
         self.simulated_camer_image = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'uploads', 'Test_Person.jpg')) # Path to a sample image for simulated camera
+        self.face_engine = None
+
+        if FaceRecognitionEngine is not None:
+            try:
+                self.face_engine = FaceRecognitionEngine(frame_skip=1)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[WARN] Facial recognition engine unavailable: {exc}")
 
     def _get_camera_frame(self):
         """
@@ -110,10 +120,14 @@ class RobotController:
             print("[ERROR] Unable to capture frame for facial recognition.")
             return False
 
-        results = ai_facial_recognition.analyze_frame(frame)
+        if not self.face_engine:
+            print("[WARN] Facial recognition engine not available.")
+            return False
+
+        results = self.face_engine.analyze_frame(frame, skip_frame_check=True)
         for result in results:
-            if result["matched"]:
-                print(f"Face recognized: {result['name']} ({result['confidence']:.2f})")
+            if result.matched:
+                print(f"Face recognized: {result.name} ({result.confidence:.2f})")
                 self.make_arrival_sound()
                 return True
 
