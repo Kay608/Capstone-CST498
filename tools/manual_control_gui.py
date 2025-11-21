@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 import threading
-from typing import Optional, Dict
+from typing import Optional, Dict, Set
 import requests
 import paramiko
 
@@ -10,7 +10,7 @@ class ManualController(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Rover RC Control")
-        self.geometry("420x360")
+        self.geometry("420x400")
 
         self.api_base = tk.StringVar(value="http://raspberrypi.local:5001")
         self.api_key = tk.StringVar(value="")
@@ -22,6 +22,10 @@ class ManualController(tk.Tk):
         self.ssh_user = tk.StringVar(value="root1")
         self.ssh_password = tk.StringVar(value="")
         self.status_text = tk.StringVar(value="Idle")
+        self.continuous_mode = tk.BooleanVar(value=False)
+
+        self._active_keys: Set[str] = set()
+        self._last_drive_command: Optional[tuple] = None
 
         self._build_ui()
         self._register_keybindings()
@@ -65,14 +69,31 @@ class ManualController(tk.Tk):
 
         sliders.columnconfigure(1, weight=1)
 
+        ttk.Checkbutton(
+            sliders,
+            text="Continuous mode (hold keys/buttons)",
+            variable=self.continuous_mode,
+            command=self._on_continuous_toggled,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(6, 0))
+
         buttons = ttk.LabelFrame(self, text="Controls")
         buttons.pack(padx=10, pady=8)
 
-        ttk.Button(buttons, text="Forward", command=lambda: self._send_move("forward")).grid(row=0, column=1, padx=10, pady=6)
-        ttk.Button(buttons, text="Back", command=lambda: self._send_move("back")).grid(row=2, column=1, padx=10, pady=6)
-        ttk.Button(buttons, text="Left", command=lambda: self._send_move("left")).grid(row=1, column=0, padx=10, pady=6)
-        ttk.Button(buttons, text="Right", command=lambda: self._send_move("right")).grid(row=1, column=2, padx=10, pady=6)
-        ttk.Button(buttons, text="Stop", command=self._send_stop).grid(row=1, column=1, padx=10, pady=6)
+        button_specs = [
+            ("forward", "Forward", 0, 1),
+            ("back", "Back", 2, 1),
+            ("left", "Left", 1, 0),
+            ("right", "Right", 1, 2),
+        ]
+
+        for direction, label, row, column in button_specs:
+            btn = ttk.Button(buttons, text=label, command=lambda d=direction: self._send_discrete_move(d))
+            btn.grid(row=row, column=column, padx=10, pady=6)
+            btn.bind("<ButtonPress-1>", lambda event, d=direction: self._handle_button_press(event, d))
+            btn.bind("<ButtonRelease-1>", lambda event, d=direction: self._handle_button_release(event, d))
+            btn.bind("<Leave>", lambda event, d=direction: self._handle_button_leave(event, d))
+
+        ttk.Button(buttons, text="Stop", command=self._handle_stop_button).grid(row=1, column=1, padx=10, pady=6)
 
         servo_frame = ttk.LabelFrame(self, text="Camera Servo")
         servo_frame.pack(fill="x", padx=10, pady=8)
@@ -85,11 +106,15 @@ class ManualController(tk.Tk):
         ttk.Label(info, textvariable=self.status_text, anchor="w").pack(fill="both", expand=True, padx=8, pady=6)
 
     def _register_keybindings(self):
-        self.bind("<Up>", lambda _: self._send_move("forward"))
-        self.bind("<Down>", lambda _: self._send_move("back"))
-        self.bind("<Left>", lambda _: self._send_move("left"))
-        self.bind("<Right>", lambda _: self._send_move("right"))
-        self.bind("<space>", lambda _: self._send_stop())
+        self.bind("<KeyPress-Up>", lambda event: self._handle_key_press("forward"))
+        self.bind("<KeyRelease-Up>", lambda event: self._handle_key_release("forward"))
+        self.bind("<KeyPress-Down>", lambda event: self._handle_key_press("back"))
+        self.bind("<KeyRelease-Down>", lambda event: self._handle_key_release("back"))
+        self.bind("<KeyPress-Left>", lambda event: self._handle_key_press("left"))
+        self.bind("<KeyRelease-Left>", lambda event: self._handle_key_release("left"))
+        self.bind("<KeyPress-Right>", lambda event: self._handle_key_press("right"))
+        self.bind("<KeyRelease-Right>", lambda event: self._handle_key_release("right"))
+        self.bind("<space>", self._on_space)
 
     # --- Networking helpers ---------------------------------------------
     def _headers(self):
@@ -99,14 +124,15 @@ class ManualController(tk.Tk):
             headers["X-Api-Key"] = token
         return headers
 
-    def _post_async(self, path: str, payload: Optional[Dict], success_msg: str):
+    def _post_async(self, path: str, payload: Optional[Dict], success_msg: Optional[str]):
         def worker():
             url = self.api_base.get().rstrip('/') + path
             try:
                 response = requests.post(url, json=payload, headers=self._headers(), timeout=4)
                 response.raise_for_status()
                 body = response.json()
-                self._log(f"✅ {success_msg}: {body}")
+                if success_msg:
+                    self._log(f"✅ {success_msg}: {body}")
             except requests.RequestException as exc:
                 self._log(f"⚠️ Request failed: {exc}")
 
@@ -126,7 +152,7 @@ class ManualController(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     # --- Command helpers ------------------------------------------------
-    def _send_move(self, direction: str):
+    def _send_discrete_move(self, direction: str):
         payload = {
             'direction': direction,
             'speed': self.speed.get(),
@@ -135,6 +161,123 @@ class ManualController(tk.Tk):
         }
         self._log(f"Sending {direction} command...")
         self._post_async('/api/manual/move', payload, f"Move {direction}")
+
+    def _handle_key_press(self, direction: str):
+        if self.continuous_mode.get():
+            if direction not in self._active_keys:
+                self._active_keys.add(direction)
+                self._update_continuous_drive()
+        else:
+            self._send_discrete_move(direction)
+
+    def _handle_key_release(self, direction: str):
+        if not self.continuous_mode.get():
+            return
+        if direction in self._active_keys:
+            self._active_keys.remove(direction)
+            self._update_continuous_drive()
+
+    def _handle_button_press(self, event, direction: str):
+        if not self.continuous_mode.get():
+            return
+        if direction not in self._active_keys:
+            self._active_keys.add(direction)
+            self._update_continuous_drive()
+        return "break"
+
+    def _handle_button_release(self, event, direction: str):
+        if not self.continuous_mode.get():
+            return
+        if direction in self._active_keys:
+            self._active_keys.remove(direction)
+        self._update_continuous_drive()
+        return "break"
+
+    def _handle_button_leave(self, event, direction: str):
+        if not self.continuous_mode.get():
+            return
+        if direction in self._active_keys:
+            self._active_keys.remove(direction)
+            self._update_continuous_drive()
+
+    def _handle_stop_button(self):
+        self._handle_space()
+
+    def _on_space(self, event):
+        self._handle_space()
+        return "break"
+
+    def _handle_space(self):
+        if self.continuous_mode.get():
+            self._active_keys.clear()
+            self._last_drive_command = None
+            self._send_drive(0.0, 0.0)
+        self._send_stop()
+
+    def _update_continuous_drive(self):
+        if not self.continuous_mode.get():
+            return
+
+        if not self._active_keys:
+            if self._last_drive_command != (0.0, 0.0):
+                self._send_drive(0.0, 0.0)
+                self._last_drive_command = (0.0, 0.0)
+                self._log("Continuous: stop")
+            return
+
+        base_speed = max(0.0, min(1.0, float(self.speed.get())))
+        linear = 0.0
+        angular = 0.0
+        if 'forward' in self._active_keys:
+            linear += 1.0
+        if 'back' in self._active_keys:
+            linear -= 1.0
+        if 'left' in self._active_keys:
+            angular += 1.0
+        if 'right' in self._active_keys:
+            angular -= 1.0
+
+        linear *= base_speed
+        angular *= base_speed
+
+        left = linear - angular
+        right = linear + angular
+
+        max_mag = max(abs(left), abs(right))
+        if max_mag > 1.0:
+            left /= max_mag
+            right /= max_mag
+
+        left = max(-1.0, min(1.0, left))
+        right = max(-1.0, min(1.0, right))
+
+        quantized = (round(left, 3), round(right, 3))
+        if quantized == self._last_drive_command:
+            return
+
+        self._last_drive_command = quantized
+        self._send_drive(left, right)
+        self._log(f"Continuous: left={quantized[0]:.2f} right={quantized[1]:.2f}")
+
+    def _send_drive(self, left: float, right: float):
+        payload = {
+            'left_speed': round(left, 3),
+            'right_speed': round(right, 3),
+        }
+        self._post_async('/api/manual/drive', payload, None)
+
+    def _on_continuous_toggled(self):
+        self.focus_set()
+        if not self.continuous_mode.get():
+            if self._active_keys:
+                self._active_keys.clear()
+            self._last_drive_command = None
+            self._send_drive(0.0, 0.0)
+            self._send_stop()
+            self._log("Continuous mode disabled.")
+        else:
+            self._last_drive_command = None
+            self._log("Continuous mode enabled. Hold arrows or press buttons.")
 
     def _send_stop(self):
         self._log("Sending stop command...")

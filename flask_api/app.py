@@ -463,6 +463,55 @@ def manual_move():
     return jsonify({'status': 'ok', 'direction': direction, 'speed': speed, 'duration': duration, 'angle': angle})
 
 
+@app.route('/api/manual/drive', methods=['POST'])
+def manual_drive():
+    if not _authorize_manual_request(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    payload = request.get_json(silent=True) or {}
+
+    interface = _get_manual_interface()
+    if not interface or not interface.is_available():
+        return jsonify({'error': 'Robot hardware not available'}), 503
+
+    if not hasattr(interface, 'set_wheel_speeds'):
+        return jsonify({'error': 'Continuous driving not supported on this hardware'}), 501
+
+    left_value = payload.get('left_speed')
+    right_value = payload.get('right_speed')
+
+    try:
+        if left_value is not None or right_value is not None:
+            if left_value is None or right_value is None:
+                raise ValueError('Both left_speed and right_speed are required')
+            left = float(left_value)
+            right = float(right_value)
+        else:
+            linear = float(payload.get('linear', 0.0))
+            angular = float(payload.get('angular', 0.0))
+            left = linear - angular
+            right = linear + angular
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': f'Invalid drive payload: {exc}'}), 400
+
+    def _clamp(value: float) -> float:
+        return max(-1.0, min(1.0, value))
+
+    left = _clamp(left)
+    right = _clamp(right)
+
+    try:
+        if abs(left) < 1e-3 and abs(right) < 1e-3:
+            interface.stop()
+        else:
+            interface.set_wheel_speeds(left, right)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Manual drive failed: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+    return jsonify({'status': 'ok', 'left_speed': round(left, 3), 'right_speed': round(right, 3)})
+
+
 @app.route('/api/manual/stop', methods=['POST'])
 def manual_stop():
     if not _authorize_manual_request(request):

@@ -85,6 +85,11 @@ class HardwareInterface(ABC):
         pass
     
     @abstractmethod
+    def set_wheel_speeds(self, left_speed: float, right_speed: float) -> None:
+        """Set normalized wheel speeds [-1, 1] for continuous driving"""
+        pass
+
+    @abstractmethod
     def stop(self) -> None:
         """Stop all robot movement"""
         pass
@@ -221,6 +226,29 @@ class YahboomRaspbotInterface(HardwareInterface):
         self.car.Car_Stop()
         logger.info(f"Turning right at speed {speed} for {angle} degrees")
     
+    def set_wheel_speeds(self, left_speed: float, right_speed: float) -> None:
+        if not self.available:
+            logger.warning("Hardware not available - wheel speed command ignored")
+            return
+
+        def _scale(value: float) -> int:
+            clamped = max(-1.0, min(1.0, float(value)))
+            return int(round(clamped * 255))
+
+        left_pwm = _scale(left_speed)
+        right_pwm = _scale(right_speed)
+        if left_pwm == 0 and right_pwm == 0:
+            self.car.Car_Stop()
+            logger.info("Continuous drive: stop command")
+            return
+
+        self.car.Control_Car(left_pwm, right_pwm)
+        logger.info(
+            "Continuous drive: wheel speeds set (left=%d, right=%d)",
+            left_pwm,
+            right_pwm,
+        )
+
     def stop(self) -> None:
         if not self.available:
             return
@@ -298,6 +326,8 @@ class SimulatedRaspbotInterface(HardwareInterface):
         self.ticks_per_revolution = 360  # encoder ticks per wheel revolution
         logger.info("Initialized simulated Raspbot interface")
         self.simulated_camera_frame = self._generate_simulated_frame()
+        self.current_left_speed = 0.0
+        self.current_right_speed = 0.0
     
     def _generate_simulated_frame(self):
         # Create a blank black image for simulation
@@ -362,7 +392,25 @@ class SimulatedRaspbotInterface(HardwareInterface):
         logger.info(f"Simulated: Turned right {angle}° to heading {math.degrees(self.theta):.1f}°")
         time.sleep(abs(angle) / 90.0)
     
+    def set_wheel_speeds(self, left_speed: float, right_speed: float) -> None:
+        left = max(-1.0, min(1.0, float(left_speed)))
+        right = max(-1.0, min(1.0, float(right_speed)))
+        self.current_left_speed = left
+        self.current_right_speed = right
+
+        if abs(left) < 1e-3 and abs(right) < 1e-3:
+            logger.info("Simulated: Continuous drive stopped")
+            return
+
+        logger.info(
+            "Simulated: Continuous wheel speeds left=%.2f right=%.2f",
+            left,
+            right,
+        )
+
     def stop(self) -> None:
+        self.current_left_speed = 0.0
+        self.current_right_speed = 0.0
         logger.info("Simulated: Robot stopped")
     
     def get_encoder_ticks(self) -> Tuple[int, int]:
