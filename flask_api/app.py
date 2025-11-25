@@ -5,6 +5,7 @@ Unified Flask REST API for Yahboom Raspbot
 """
 import sys
 import os
+import base64
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import Optional
@@ -24,7 +25,7 @@ PYTHON_CODES_DIR = BASE_DIR / "python codes"
 if PYTHON_CODES_DIR.exists() and str(PYTHON_CODES_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_CODES_DIR))
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 
 # Import robot controller with fallback for TensorFlow issues
 try:
@@ -50,6 +51,7 @@ except ImportError:
 
 import socket
 import face_recognition
+import cv2
 
 
 def _is_truthy(value: str) -> bool:
@@ -198,6 +200,7 @@ def load_encodings_from_db():
             rows = cur.fetchall()
             for row in rows:
                 # In this context, 'name' is the banner_id for identification
+
                 name = row['banner_id']
                 encoding_bytes = row['encoding']
                 # Deserialize the BLOB back to a numpy array
@@ -212,6 +215,65 @@ def load_encodings_from_db():
             conn.close()
     
     return known_encodings, known_names
+
+
+def _mjpeg_stream(interface):
+    while True:
+        try:
+            frame = interface.get_camera_frame()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ERROR] Failed to fetch camera frame: {exc}")
+            time.sleep(0.1)
+            continue
+
+        if frame is None:
+            time.sleep(0.1)
+            continue
+
+        success, buffer = cv2.imencode('.jpg', frame)
+        if not success:
+            time.sleep(0.05)
+            continue
+
+        chunk = buffer.tobytes()
+        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + chunk + b"\r\n"
+        time.sleep(0.05)
+
+
+@app.route('/api/manual/stream')
+def manual_stream():
+    if not _authorize_manual_request(request):
+        return Response('Unauthorized', status=401)
+
+    interface = _get_manual_interface()
+    if not interface or not interface.is_available():
+        return Response('Robot hardware not available', status=503)
+
+    return Response(
+        stream_with_context(_mjpeg_stream(interface)),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+    )
+
+
+@app.route('/api/manual/capture', methods=['GET'])
+def manual_capture():
+    if not _authorize_manual_request(request):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    interface = _get_manual_interface()
+    if not interface or not interface.is_available():
+        return jsonify({'error': 'Robot hardware not available'}), 503
+
+    frame = interface.get_camera_frame()
+    if frame is None:
+        return jsonify({'error': 'Failed to capture frame'}), 500
+
+    success, buffer = cv2.imencode('.jpg', frame)
+    if not success:
+        return jsonify({'error': 'Failed to encode frame'}), 500
+
+    encoded = base64.b64encode(buffer).decode('ascii')
+    return jsonify({'image': encoded})
 
 def save_user_to_db(banner_id, first_name, last_name, email, encoding):
     print("\n[DEBUG] Starting save_user_to_db function")

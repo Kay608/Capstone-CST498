@@ -286,20 +286,36 @@ class YahboomRaspbotInterface(HardwareInterface):
             if self.camera_type == 'picamera2':
                 # Pi Camera 2 returns numpy array directly
                 frame = self.camera.capture_array()
-                if frame is not None and frame.ndim == 3:
+                if frame is None or getattr(frame, 'size', 0) == 0:
+                    logger.warning("Picamera2 returned empty frame; restarting camera")
+                    with suppress(Exception):
+                        self.camera.stop()
+                        self.camera.start()
+                    time.sleep(0.05)
+                    return None
+                if frame.ndim == 3:
                     # picamera2 delivers RGB, convert to BGR for OpenCV consistency
                     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 return frame
             else:
                 # OpenCV VideoCapture
                 if not self.camera.isOpened():
-                    logger.warning("Camera not available - returning None")
-                    return None
-                ret, frame = self.camera.read()
-                if not ret:
-                    logger.error("Failed to grab frame from camera")
-                    return None
-                return frame
+                    logger.warning("Camera capture closed - attempting reopen")
+                    with suppress(Exception):
+                        self.camera.open(0)
+                    time.sleep(0.05)
+                    if not self.camera.isOpened():
+                        logger.error("Unable to reopen camera capture")
+                        return None
+
+                for attempt in range(3):
+                    ret, frame = self.camera.read()
+                    if ret and frame is not None:
+                        return frame
+                    time.sleep(0.05)
+
+                logger.error("Failed to grab frame from camera after retries")
+                return None
         except Exception as e:
             logger.error(f"Failed to capture frame: {e}")
             return None
