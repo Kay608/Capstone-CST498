@@ -1,7 +1,11 @@
 import threading
 import tkinter as tk
 from tkinter import ttk
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
+
+DEFAULT_REMOTE_PORT = 5001
+# Prefer the hotspot-friendly mDNS hostname before other fallbacks.
+HOST_FALLBACKS = ("raspberrypi.local", "raspberrypi")
 
 import paramiko
 import requests
@@ -23,7 +27,7 @@ class ManualControlFrame(ttk.Frame):
         self.duration = tk.DoubleVar(master=self, value=0.5)
         self.angle = tk.DoubleVar(master=self, value=90.0)
         self.servo_angle = tk.IntVar(master=self, value=90)
-        self.ssh_host = tk.StringVar(master=self, value="raspberrypi")
+        self.ssh_host = tk.StringVar(master=self, value="raspberrypi.local")
         self.ssh_user = tk.StringVar(master=self, value="root1")
         self.ssh_password = tk.StringVar(master=self, value="")
         self.status_text = tk.StringVar(master=self, value="Idle")
@@ -31,6 +35,8 @@ class ManualControlFrame(ttk.Frame):
 
         self._active_keys: Set[str] = set()
         self._last_drive_command: Optional[tuple] = None
+        self._last_remote_base: Optional[str] = None
+        self._ssh_discovered_ip: Optional[str] = None
 
         self._build_ui()
         self._register_keybindings()
@@ -65,6 +71,7 @@ class ManualControlFrame(ttk.Frame):
         ttk.Entry(ssh_frame, textvariable=self.ssh_password, show="*", width=16).grid(row=1, column=1, padx=6, pady=4, sticky="ew")
         ttk.Button(ssh_frame, text="Start API", command=self._start_remote_api).grid(row=0, column=4, padx=6, pady=4)
         ttk.Button(ssh_frame, text="Stop API", command=self._stop_remote_api).grid(row=1, column=4, padx=6, pady=4)
+        ttk.Button(ssh_frame, text="Detect Base", command=self._discover_remote_base).grid(row=0, column=5, rowspan=2, padx=6, pady=4)
 
         sliders = ttk.LabelFrame(self, text="Command Settings")
         sliders.grid(row=2, column=0, sticky="ew", padx=10, pady=8)
@@ -125,33 +132,37 @@ class ManualControlFrame(ttk.Frame):
         self.root.bind("<space>", self._on_space)
 
     # --- Networking helpers ---------------------------------------------
-    def _headers(self) -> Dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        token = self.api_key.get().strip()
-        if token:
-            headers["X-Api-Key"] = token
-        return headers
+    def _candidate_ssh_hosts(self) -> List[str]:
+        candidates: List[str] = []
+        manual_entry = self.ssh_host.get().strip()
+        if manual_entry:
+            candidates.append(manual_entry)
 
-    def _post_async(self, path: str, payload: Optional[Dict], success_msg: Optional[str]) -> None:
-        def worker() -> None:
-            url = self.api_base.get().rstrip('/') + path
-            try:
-                response = requests.post(url, json=payload, headers=self._headers(), timeout=4)
-                response.raise_for_status()
-                if success_msg:
-                    body = response.json()
-                    self._log(f"✅ {success_msg}: {body}")
-            except requests.RequestException as exc:
-                self._log(f"⚠️ Request failed: {exc}")
+        if self._ssh_discovered_ip:
+            candidates.append(self._ssh_discovered_ip)
 
-        threading.Thread(target=worker, daemon=True).start()
+        api_host, _ = self._split_host_port(self.api_base.get().strip())
+        if api_host:
+            candidates.append(api_host)
+
+        for alias in HOST_FALLBACKS:
+            candidates.append(alias)
+
+        unique: List[str] = []
+        seen: Set[str] = set()
+        for value in candidates:
+            entry = value.strip()
+            if not entry or entry in seen:
+                continue
+            seen.add(entry)
+            unique.append(entry)
+        return unique
 
     def _check_status(self) -> None:
+
         def worker() -> None:
-            url = self.api_base.get().rstrip('/') + '/api/manual/status'
             try:
-                response = requests.get(url, headers=self._headers(), timeout=4)
-                response.raise_for_status()
+                response = self._remote_request("GET", "/api/manual/status", timeout=4)
                 body = response.json()
                 self._log(f"Status: {body}")
             except requests.RequestException as exc:
@@ -343,11 +354,7 @@ class ManualControlFrame(ttk.Frame):
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 client.connect(hostname=host, username=user, password=password, timeout=10)
-                remote_cmd = (
-                    "bash -lc 'pkill -f "
-                    """flask_api/app.py""" "
-                    "|| pkill -f \"python app.py\"'"
-                )
+                remote_cmd = "bash -lc 'pkill -f \"flask_api/app.py\" || pkill -f \"python app.py\"'"
                 stdin, stdout, stderr = client.exec_command(remote_cmd)
                 stdout.channel.recv_exit_status()
                 client.close()
@@ -358,8 +365,193 @@ class ManualControlFrame(ttk.Frame):
         threading.Thread(target=worker, daemon=True).start()
 
     # --- Logging --------------------------------------------------------
+    def _discover_remote_base(self) -> None:
+        user = self.ssh_user.get().strip() or 'root1'
+        password = self.ssh_password.get()
+        candidates = self._candidate_ssh_hosts()
+        if not candidates:
+            self._log("⚠️ SSH host is required to detect the API base.")
+            return
+
+        def worker() -> None:
+            last_error: Optional[Exception] = None
+            for host in candidates:
+                self._log(f"Detecting API endpoint via {user}@{host}...")
+                try:
+                    client = paramiko.SSHClient()
+                    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    client.connect(hostname=host, username=user, password=password, timeout=10)
+                    detect_cmd = (
+                        "set -o pipefail; "
+                        "(hostname -I || ip -o addr show | awk '{print $4}')"
+                    )
+                    stdin, stdout, stderr = client.exec_command(f"bash -lc \"{detect_cmd}\"")
+                    output = stdout.read().decode().strip()
+                    error_output = stderr.read().decode().strip()
+                    client.close()
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    continue
+
+                if not output and error_output:
+                    last_error = RuntimeError(error_output)
+                    continue
+
+                tokens = [segment.split('/')[0] for segment in output.replace("\n", " ").split() if segment]
+                ipv4 = next((token for token in tokens if self._is_ipv4(token)), "")
+                chosen = ipv4 or (tokens[0] if tokens else "")
+                if not chosen:
+                    last_error = RuntimeError("Remote host did not report any IP addresses.")
+                    continue
+
+                address = ipv4 or chosen
+                if ipv4:
+                    self._ssh_discovered_ip = ipv4
+                    self.after(0, lambda h=ipv4: self.ssh_host.set(h))
+                else:
+                    self.after(0, lambda h=host: self.ssh_host.set(h))
+
+                base = self._format_base_url(address)
+                self._last_remote_base = base.rstrip('/')
+                if self._is_ipv4(address):
+                    self._log(f"✅ Detected IPv4 {address}; updated SSH host and API base.")
+                else:
+                    self._log(f"✅ Detected address {address}; updated API base.")
+                self.after(0, lambda: self.api_base.set(base))
+                return
+
+            message = f"SSH detection failed: {last_error}" if last_error else "SSH detection failed."
+            self._log(f"⚠️ {message}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # --- Logging --------------------------------------------------------
     def _log(self, message: str) -> None:
         self.after(0, lambda: self.status_text.set(message))
+
+    def _candidate_ssh_hosts(self) -> List[str]:
+        candidates: List[str] = []
+        manual_entry = self.ssh_host.get().strip()
+        if manual_entry:
+            candidates.append(manual_entry)
+
+        if self._ssh_discovered_ip:
+            candidates.append(self._ssh_discovered_ip)
+
+        api_host, _ = self._split_host_port(self.api_base.get().strip())
+        if api_host:
+            candidates.append(api_host)
+
+        for alias in HOST_FALLBACKS:
+            candidates.append(alias)
+
+        unique: List[str] = []
+        seen: Set[str] = set()
+        for value in candidates:
+            entry = value.strip()
+            if not entry or entry in seen:
+                continue
+            seen.add(entry)
+            unique.append(entry)
+        return unique
+
+    def _candidate_base_urls(self) -> List[str]:
+        raw = self.api_base.get().strip()
+        host, port = self._split_host_port(raw)
+
+        entries: List[str] = []
+        if raw:
+            entries.append(raw)
+        else:
+            entries.append(f"http://{host}:{port}")
+
+        if self._last_remote_base:
+            entries.append(self._last_remote_base)
+
+        if self._ssh_discovered_ip:
+            entries.append(f"http://{self._ssh_discovered_ip}:{port}")
+
+        for alias in HOST_FALLBACKS:
+            entries.append(f"http://{alias}:{port}")
+
+        candidates: List[str] = []
+        seen: Set[str] = set()
+        for value in entries:
+            formatted = self._format_base_url(value)
+            if not formatted or formatted in seen:
+                continue
+            seen.add(formatted)
+            candidates.append(formatted.rstrip('/'))
+        return candidates
+
+    def _normalized_base_url(self) -> str:
+        candidates = self._candidate_base_urls()
+        if not candidates:
+            normalized = self._format_base_url(self.api_base.get().strip())
+            if normalized:
+                self.after(0, lambda: self.api_base.set(normalized))
+            return normalized
+        first = candidates[0]
+        if first != self.api_base.get().strip():
+            self.after(0, lambda b=first: self.api_base.set(b))
+        return first
+
+    @staticmethod
+    def _format_base_url(value: str) -> str:
+        host, port = ManualControlFrame._split_host_port(value)
+        if not host:
+            return ""
+        if ':' in host and not host.startswith('['):
+            host_display = f'[{host}]'
+        else:
+            host_display = host
+        return f"http://{host_display}:{port}".rstrip('/')
+
+    @staticmethod
+    def _split_host_port(value: str) -> tuple[str, int]:
+        candidate = value.strip()
+        if candidate.startswith('http://') or candidate.startswith('https://'):
+            candidate = candidate.split('://', 1)[1]
+        if '/' in candidate:
+            candidate = candidate.split('/', 1)[0]
+
+        host = candidate
+        port_str = ""
+
+        if candidate.startswith('['):
+            closing = candidate.find(']')
+            if closing != -1:
+                host = candidate[1:closing]
+                remainder = candidate[closing + 1:]
+                if remainder.startswith(':'):
+                    port_str = remainder[1:]
+        else:
+            if candidate.count(':') > 1:
+                base, _, possible_port = candidate.rpartition(':')
+                if possible_port.isdigit():
+                    host = base
+                    port_str = possible_port
+                else:
+                    host = candidate
+            elif ':' in candidate:
+                host, port_str = candidate.split(':', 1)
+
+        port = DEFAULT_REMOTE_PORT
+        if port_str.isdigit():
+            port = int(port_str)
+        host = host or 'raspberrypi'
+        return host, port
+
+    @staticmethod
+    def _is_ipv4(value: str) -> bool:
+        value = value.strip().split('/')[0]
+        parts = value.split('.')
+        if len(parts) != 4:
+            return False
+        try:
+            return all(0 <= int(part) <= 255 for part in parts)
+        except ValueError:
+            return False
 
 
 def launch_manual_control() -> None:
@@ -367,4 +559,3 @@ def launch_manual_control() -> None:
     frame = ManualControlFrame(root, set_window_chrome=True)
     frame.pack(fill="both", expand=True)
     root.mainloop()
-```},

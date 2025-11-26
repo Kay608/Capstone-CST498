@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 import tkinter as tk
+from multiprocessing import Process
 from tkinter import messagebox
 from tkinter import ttk
 from typing import Optional
@@ -25,7 +25,7 @@ class VncViewerFrame(ttk.Frame):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master)
         self.url = tk.StringVar(self, value=DEFAULT_VNC_URL)
-        self._webview_thread: Optional[threading.Thread] = None
+        self._webview_process: Optional[Process] = None
 
         description = ttk.Label(
             self,
@@ -77,25 +77,51 @@ class VncViewerFrame(ttk.Frame):
             messagebox.showerror("VNC Viewer", "Please provide a noVNC URL.")
             return
 
-        def _runner() -> None:
-            try:
-                if webview.windows:
-                    webview.windows[0].load_url(url)
-                else:
-                    webview.create_window("Raspberry Pi Desktop", url)
-                    webview.start()
-            except Exception as exc:  # noqa: BLE001
-                messagebox.showerror("VNC Viewer", f"Failed to launch embedded viewer: {exc}")
-                return
-
-        if self._webview_thread and self._webview_thread.is_alive():
-            self.status.set("Updating existing viewer window...")
-            _runner()
+        if self._webview_process and self._webview_process.is_alive():
+            self.status.set("Embedded viewer already running.")
             return
 
-        self.status.set("Launching embedded viewer...")
-        self._webview_thread = threading.Thread(target=_runner, daemon=True)
-        self._webview_thread.start()
+        self.status.set("Launching embedded viewer in separate window...")
+        try:
+            process = Process(target=VncViewerFrame._run_webview_process, args=(url,), daemon=True)
+            process.start()
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("VNC Viewer", f"Failed to launch embedded viewer: {exc}")
+            self.status.set("Failed to launch embedded viewer.")
+            return
+
+        self._webview_process = process
+        self.after(750, self._monitor_webview_process)
+        self.status.set("Embedded viewer launched in a separate window.")
+
+    def _monitor_webview_process(self) -> None:
+        if not self._webview_process:
+            return
+        if self._webview_process.is_alive():
+            self.after(2000, self._monitor_webview_process)
+            return
+
+        exit_code = self._webview_process.exitcode
+        if exit_code == 0 or exit_code is None:
+            self.status.set("Embedded viewer closed.")
+        else:
+            self.status.set(f"Embedded viewer exited (code {exit_code}).")
+        self._webview_process = None
+
+    @staticmethod
+    def _run_webview_process(url: str) -> None:
+        try:
+            import webview  # type: ignore[import]
+
+            if webview.windows:
+                webview.windows[0].load_url(url)
+            else:
+                webview.create_window("Raspberry Pi Desktop", url)
+            webview.start()
+        except Exception:  # noqa: BLE001
+            import traceback
+
+            traceback.print_exc()
 
 
 class MasterControlApp(tk.Tk):
