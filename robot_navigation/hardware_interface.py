@@ -10,19 +10,24 @@ from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 from contextlib import suppress
 import logging
-import cv2 # Import OpenCV
-
-# Import the Yahboom Raspbot driver
-try:
-    from raspbot.YB_Pcb_Car import YB_Pcb_Car
-except ImportError:
-    # Fallback for when not running on the Pi or raspbot is not in path
-    print("Warning: Could not import YB_Pcb_Car. Running in simulation mode or ensure raspbot directory is in PYTHONPATH.")
-    YB_Pcb_Car = None
+import cv2  # Import OpenCV
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_HW_IMPORT_ERROR: Optional[str] = None
+
+# Import the Yahboom Raspbot driver
+try:
+    from raspbot.YB_Pcb_Car import YB_Pcb_Car
+except ImportError as exc:
+    _HW_IMPORT_ERROR = str(exc)
+    logger.error(
+        "Could not import YB_Pcb_Car driver: %s. Running in simulation mode or ensure raspbot directory is in PYTHONPATH.",
+        exc,
+    )
+    YB_Pcb_Car = None
 
 _DETECTED_REAL_ROBOT: Optional[bool] = None
 
@@ -130,12 +135,15 @@ class YahboomRaspbotInterface(HardwareInterface):
         self.camera = None
         self.use_picamera = use_picamera
         self.camera_type = None
+        self._init_error: Optional[str] = None
         self._initialize_hardware()
     
     def _initialize_hardware(self):
         """Initialize connection to Yahboom Raspbot hardware"""
         if YB_Pcb_Car is None:
-            logger.error("YB_Pcb_Car driver not imported. Hardware interface not available.")
+            reason = _HW_IMPORT_ERROR or "YB_Pcb_Car driver not imported."
+            logger.error("%s Hardware interface not available.", reason)
+            self._init_error = reason
             self.available = False
             return
         try:
@@ -177,6 +185,7 @@ class YahboomRaspbotInterface(HardwareInterface):
             self.available = True
         except Exception as e:
             logger.error(f"Hardware initialization failed: {e}")
+            self._init_error = str(e)
             self.available = False
     
     def move_forward(self, speed: float, duration: float) -> None:
@@ -328,6 +337,13 @@ class YahboomRaspbotInterface(HardwareInterface):
         """Access to the underlying YB_Pcb_Car object for direct hardware control."""
         return self.car
 
+    def last_error(self) -> Optional[str]:
+        if self.available:
+            return None
+        if self._init_error:
+            return self._init_error
+        return _HW_IMPORT_ERROR
+
 class SimulatedRaspbotInterface(HardwareInterface):
     """Simulated hardware interface for development without physical robot"""
     
@@ -346,9 +362,33 @@ class SimulatedRaspbotInterface(HardwareInterface):
         self.current_right_speed = 0.0
     
     def _generate_simulated_frame(self):
-        # Create a blank black image for simulation
-        import numpy as np # Import numpy for array creation
-        return np.zeros((240, 320, 3), dtype=np.uint8)
+        # Create a placeholder frame with diagnostic overlays for simulation mode.
+        import numpy as np  # Import numpy for array creation
+
+        frame = np.zeros((240, 320, 3), dtype=np.uint8)
+        frame[:, :] = (15, 15, 15)
+        cv2.rectangle(frame, (10, 10), (310, 230), (60, 60, 60), 2)
+        cv2.putText(
+            frame,
+            "Simulation",
+            (70, 115),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (200, 200, 200),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            "No camera feed",
+            (56, 150),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (150, 150, 150),
+            1,
+            cv2.LINE_AA,
+        )
+        return frame
 
     def move_forward(self, speed: float, duration: float) -> None:
         distance = speed * duration
@@ -447,7 +487,19 @@ class SimulatedRaspbotInterface(HardwareInterface):
         logger.info(f"Simulated: Setting camera servo to {angle} degrees")
     
     def get_camera_frame(self) -> Optional[any]:
-        return self.simulated_camera_frame
+        frame = self.simulated_camera_frame.copy()
+        timestamp = time.strftime("%H:%M:%S")
+        cv2.putText(
+            frame,
+            f"Simulated feed @ {timestamp}",
+            (20, 210),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (180, 180, 180),
+            1,
+            cv2.LINE_AA,
+        )
+        return frame
     
     def is_available(self) -> bool:
         return True
@@ -456,6 +508,9 @@ class SimulatedRaspbotInterface(HardwareInterface):
     def robot(self):
         """Simulated robot object with buzzer methods for testing."""
         return SimulatedBuzzer()
+
+    def last_error(self) -> Optional[str]:
+        return None
     
     def get_position(self) -> Tuple[float, float, float]:
         """Get current simulated position (x, y, theta) - for debugging only"""
@@ -481,7 +536,12 @@ class SimulatedBuzzer:
         """Simulate custom buzzer control."""
         print(f"[SIMULATED BUZZER] Custom buzz: {frequency}Hz for {duration}ms")
 
-def create_hardware_interface(use_simulation: Optional[bool] = None, use_picamera: bool = True) -> HardwareInterface:
+def create_hardware_interface(
+    use_simulation: Optional[bool] = None,
+    use_picamera: bool = True,
+    *,
+    allow_simulation_fallback: bool = True,
+) -> HardwareInterface:
     """Factory function to create appropriate hardware interface.
 
     Args:
@@ -495,8 +555,10 @@ def create_hardware_interface(use_simulation: Optional[bool] = None, use_picamer
     if use_simulation is False:
         interface = YahboomRaspbotInterface(use_picamera=use_picamera)
         if not interface.is_available():
-            logger.warning("Real hardware requested but unavailable; falling back to simulation")
-            return SimulatedRaspbotInterface()
+            message = interface.last_error() or "unknown reason"
+            logger.warning("Real hardware requested but unavailable (%s).", message)
+            if allow_simulation_fallback:
+                return SimulatedRaspbotInterface()
         return interface
 
     if detect_robot_hardware():

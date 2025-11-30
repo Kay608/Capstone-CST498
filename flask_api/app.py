@@ -89,6 +89,9 @@ def api_health():
 MANUAL_CONTROL_TOKEN = os.environ.get("RC_CONTROL_TOKEN", "")
 # Manual control interface (lazily initialized for testing)
 _manual_interface = None
+_CAP_ANY = getattr(cv2, "CAP_ANY", 0)
+_CAP_V4L2 = getattr(cv2, "CAP_V4L2", _CAP_ANY)
+_CAP_GSTREAMER = getattr(cv2, "CAP_GSTREAMER", _CAP_ANY)
 
 
 def _authorize_manual_request(req) -> bool:
@@ -103,14 +106,70 @@ def _get_manual_interface():
     if _manual_interface and _manual_interface.is_available():
         return _manual_interface
     try:
-        candidate = create_hardware_interface(use_simulation=False)
+        candidate = create_hardware_interface(
+            use_simulation=False,
+            allow_simulation_fallback=False,
+        )
     except Exception as exc:  # noqa: BLE001
         print(f"[ERROR] Failed to initialize manual control hardware: {exc}")
         return None
     if candidate.is_available():
         _manual_interface = candidate
         return _manual_interface
+    reason = None
+    if hasattr(candidate, "last_error"):
+        with suppress(Exception):
+            reason = candidate.last_error()
+    if reason:
+        print(f"[WARN] Manual hardware interface unavailable: {reason}")
     return None
+
+
+def _camera_status_message(interface=None) -> str:
+    if interface and hasattr(interface, "last_error"):
+        with suppress(Exception):
+            reason = interface.last_error()
+            if reason:
+                return reason
+    return "Camera hardware not available."
+
+
+def _candidate_camera_sources() -> list[tuple[str, object, int]]:
+    sources: list[tuple[str, object, int]] = []
+    env_source = os.environ.get("CAPSTONE_CAMERA_PIPELINE")
+    if env_source:
+        if env_source.isdigit():
+            sources.append((f"Camera index {env_source}", int(env_source), _CAP_V4L2))
+        else:
+            backend = _CAP_GSTREAMER if " " in env_source else _CAP_ANY
+            sources.append((f"Pipeline {env_source}", env_source, backend))
+
+    device0 = "/dev/video0"
+    if os.path.exists(device0):
+        sources.append((f"Device {device0}", device0, _CAP_V4L2))
+
+    sources.append(("Camera index 0", 0, _CAP_ANY))
+    sources.append(("Camera index 1", 1, _CAP_ANY))
+    return sources
+
+
+def _open_fallback_capture():
+    for label, source, backend in _candidate_camera_sources():
+        try:
+            if isinstance(source, str) and source.startswith("/dev/") and not os.path.exists(source):
+                continue
+            capture = cv2.VideoCapture(source, backend)
+            if not capture or not capture.isOpened():
+                if capture:
+                    capture.release()
+                continue
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            capture.set(cv2.CAP_PROP_FPS, 30)
+            return capture, label
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] Fallback camera open failed for {source}: {exc}")
+    return None, None
 
 # --- JawsDB (MySQL) Configuration ---
 # Hardcoded values for testing
@@ -230,18 +289,44 @@ def load_encodings_from_db():
     return known_encodings, known_names
 
 
-def _mjpeg_stream(interface):
+def _mjpeg_stream(interface, capture=None, overlay_text: str | None = None):
+    use_interface = interface is not None and interface.is_available()
+    if not use_interface and capture is None:
+        raise RuntimeError("Camera capture not initialized")
+
     while True:
-        try:
-            frame = interface.get_camera_frame()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[ERROR] Failed to fetch camera frame: {exc}")
-            time.sleep(0.1)
-            continue
+        frame = None
+        if use_interface:
+            try:
+                frame = interface.get_camera_frame()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ERROR] Failed to fetch camera frame: {exc}")
+                time.sleep(0.1)
+                continue
+        else:
+            assert capture is not None
+            ok, grabbed = capture.read()
+            if ok:
+                frame = grabbed
+            else:
+                time.sleep(0.1)
+                continue
 
         if frame is None:
             time.sleep(0.1)
             continue
+
+        if overlay_text:
+            cv2.putText(
+                frame,
+                overlay_text,
+                (18, 28),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
 
         success, buffer = cv2.imencode('.jpg', frame)
         if not success:
@@ -253,17 +338,39 @@ def _mjpeg_stream(interface):
         time.sleep(0.05)
 
 
+def _build_stream_response(interface):
+    capture = None
+    overlay = None
+    use_interface = interface is not None and interface.is_available()
+
+    if not use_interface:
+        capture, label = _open_fallback_capture()
+        if capture is None:
+            return None, _camera_status_message(interface)
+        overlay = f"Fallback: {label}"
+
+    def _generator():
+        try:
+            yield from _mjpeg_stream(interface if use_interface else None, capture, overlay)
+        finally:
+            if capture is not None:
+                capture.release()
+
+    return _generator, None
+
+
 @app.route('/api/manual/stream')
 def manual_stream():
     if not _authorize_manual_request(request):
         return Response('Unauthorized', status=401)
 
     interface = _get_manual_interface()
-    if not interface or not interface.is_available():
-        return Response('Robot hardware not available', status=503)
+    generator, error_message = _build_stream_response(interface)
+    if generator is None:
+        return Response(error_message, status=503)
 
     return Response(
-        stream_with_context(_mjpeg_stream(interface)),
+        stream_with_context(generator()),
         mimetype='multipart/x-mixed-replace; boundary=frame',
     )
 
@@ -274,12 +381,21 @@ def manual_capture():
         return jsonify({'error': 'Unauthorized'}), 401
 
     interface = _get_manual_interface()
-    if not interface or not interface.is_available():
-        return jsonify({'error': 'Robot hardware not available'}), 503
+    frame = None
+    if interface and interface.is_available():
+        frame = interface.get_camera_frame()
 
-    frame = interface.get_camera_frame()
     if frame is None:
-        return jsonify({'error': 'Failed to capture frame'}), 500
+        capture, _ = _open_fallback_capture()
+        if capture is None:
+            return jsonify({'error': _camera_status_message(interface)}), 503
+        try:
+            ok, grabbed = capture.read()
+            if not ok or grabbed is None:
+                return jsonify({'error': 'Failed to capture frame'}), 500
+            frame = grabbed
+        finally:
+            capture.release()
 
     success, buffer = cv2.imencode('.jpg', frame)
     if not success:
