@@ -72,6 +72,19 @@ _run_debug_mode = _is_truthy(_debug_env)
 
 # Track high-level robot state for status endpoint; initialized here so gunicorn workers inherit it
 status = {'state': 'idle', 'last_goal': None, 'last_update': time.time()}
+APP_START_TIME = time.time()
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """Simple health check endpoint for remote monitoring."""
+
+    uptime = time.time() - APP_START_TIME
+    payload = {
+        'status': 'ok',
+        'uptime': uptime,
+        'state': status.get('state', 'unknown'),
+    }
+    return jsonify(payload), 200
+
 
 MANUAL_CONTROL_TOKEN = os.environ.get("RC_CONTROL_TOKEN", "")
 # Manual control interface (lazily initialized for testing)
