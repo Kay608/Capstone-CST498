@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 from typing import Optional
 
 try:  # pragma: no cover - optional dependency guard
@@ -93,10 +94,18 @@ class SSHService:
         return self.execute(wrapped)
 
     def stop_by_pattern(self, pattern: str) -> SSHCommandResult:
-        command = f"pkill -f '{pattern}' || true" if pattern else ""
+        if not pattern:
+            raise ValueError("pattern must not be empty")
+        inner = f"pkill -f {shlex.quote(pattern)} || true"
+        command = f"bash -lc {shlex.quote(inner)}"
         if not command:
             raise ValueError("pattern must not be empty")
         return self.execute(command)
+
+    def exec_stream(self, command: str):
+        self.connect()
+        assert self._client is not None
+        return self._client.exec_command(command)
 
     def __enter__(self) -> "SSHService":
         self.connect()
