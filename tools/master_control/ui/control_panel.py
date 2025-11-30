@@ -45,7 +45,6 @@ class ControlPanel(BasePanel):
         stop_api_btn.pack(side="left", padx=(0, 8))
 
         ttk.Button(button_row, text="Ping API", command=self._ping_api).pack(side="left")
-        ttk.Button(button_row, text="View Log", command=self._show_log).pack(side="left", padx=(8, 0))
 
         host_frame = ttk.LabelFrame(self, text="Target Host")
         host_frame.pack(fill="x", padx=12, pady=(0, 12))
@@ -172,6 +171,8 @@ class ControlPanel(BasePanel):
             raise RuntimeError(f"Processes still running after stop: {joined}")
 
         attempted_display = ", ".join(attempted)
+        self._record_stop_confirmation(services, attempted_display)
+        self._enqueue_log_event("status", "API stop confirmed and logged.")
         return f"Stop request sent for patterns [{attempted_display}]."
 
     def _tail_log_job(self, line_count: int = 40) -> str:
@@ -210,30 +211,6 @@ class ControlPanel(BasePanel):
             return path
         return shlex.quote(path)
 
-    def _show_log(self) -> None:
-        try:
-            content = self._tail_log_job(line_count=80)
-        except Exception as exc:
-            messagebox.showerror("View Log", str(exc))
-            return
-        display_text = self._last_log or content
-
-        window = tk.Toplevel(self)
-        window.title("API Log (tail)")
-        window.geometry("720x360")
-
-        container = ttk.Frame(window)
-        container.pack(fill="both", expand=True)
-
-        text_widget = tk.Text(container, wrap="none")
-        text_widget.insert("1.0", display_text)
-        text_widget.configure(state="disabled")
-        text_widget.pack(side="left", fill="both", expand=True)
-
-        scroll_y = ttk.Scrollbar(container, orient="vertical", command=text_widget.yview)
-        text_widget.configure(yscrollcommand=scroll_y.set)
-        scroll_y.pack(side="right", fill="y")
-
     def _copy_log_to_clipboard(self) -> None:
         if not self._last_log:
             return
@@ -242,6 +219,17 @@ class ControlPanel(BasePanel):
             self.clipboard_append(self._last_log)
         except tk.TclError:
             messagebox.showwarning("Copy Log", "Unable to access clipboard.")
+
+    def _record_stop_confirmation(self, services, attempted_display: str) -> None:
+        sanitized = attempted_display.replace("\n", " ") or "n/a"
+        patterns_arg = shlex.quote(sanitized)
+        inner = (
+            'printf "%s [master-control] API stop confirmed (patterns: %s)\\n" '
+            '"$(date +%Y-%m-%dT%H:%M:%S)" {patterns} >> ~/master_control.log'
+        ).format(patterns=patterns_arg)
+        result = services.ssh.execute(f"bash -lc {shlex.quote(inner)}")
+        if not result.ok:
+            raise RuntimeError(result.stderr or "Unable to append stop confirmation to log")
 
     def _enqueue_log_event(self, kind: str, payload: str) -> None:
         self._log_events.put((kind, payload))

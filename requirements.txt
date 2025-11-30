@@ -16,3 +16,4 @@ zeroconf==0.132.2
 ultralytics==8.3.223 # For YOLOv8 object detection model
 requests==2.31.0
 paramiko==3.4.0
+Pillow==10.2.0

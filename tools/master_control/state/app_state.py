@@ -139,3 +139,13 @@ class AppState:
             return "Unresolved"
         family = "IPv6" if resolution.family == socket.AF_INET6 else "IPv4"
         return f"{resolution.address} ({family}, from {resolution.source})"
+
+    def camera_stream_url(self) -> str:
+        host = self._resolved_address(for_url=True)
+        remote = self.config.remote
+        url = self.config.stream_url.format(host=host, port=remote.api_port)
+        api_key = (self.config.default_api_key or "").strip()
+        if api_key:
+            separator = "&" if "?" in url else "?"
+            url = f"{url}{separator}api_key={api_key}"
+        return url

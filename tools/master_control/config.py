@@ -43,7 +43,7 @@ class AppConfig:
     default_api_key: str = ""
     capture_endpoint: str = "/api/manual/capture"
     status_endpoint: str = "/api/manual/status"
-    stream_url: str = "http://{host}:{port}/api/video/stream"
+    stream_url: str = "http://{host}:{port}/api/manual/stream"
 
 
 DEFAULT_CONFIG = AppConfig()
