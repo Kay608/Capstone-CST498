@@ -511,7 +511,7 @@ class HarnessFrame(ttk.Frame):
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 client.connect(hostname=host, username=user, password=password, timeout=10)
-                base_cmd = "cd ~/Capstone-CST498 && source .venv/bin/activate"
+                base_cmd = "cd ~/Capstone-CST498 && source .venv311/bin/activate"
                 if background:
                     slug = re.sub(r"[^a-zA-Z0-9]+", "_", title.lower()).strip("_") or "remote_task"
                     log_path = f"/tmp/{slug}.log"

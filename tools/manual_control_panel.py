@@ -324,7 +324,7 @@ class ManualControlFrame(ttk.Frame):
                 client.connect(hostname=host, username=user, password=password, timeout=10)
                 remote_cmd = (
                     "bash -lc 'cd ~/Capstone-CST498 && "
-                    "source .venv/bin/activate && "
+                    "source .venv311/bin/activate && "
                     "cd flask_api && "
                     "nohup python app.py >/tmp/rc_manual.log 2>&1 &'"
                 )

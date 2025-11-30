@@ -122,12 +122,10 @@ class VncViewerFrame(ttk.Frame):
             import traceback
 
             traceback.print_exc()
-
-
-class MasterControlApp(tk.Tk):
+class LegacyMasterControlApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Capstone Master Control")
+        self.title("Capstone Master Control (Legacy)")
         self.geometry("900x720")
 
         notebook = ttk.Notebook(self)
@@ -146,9 +144,33 @@ class MasterControlApp(tk.Tk):
         notebook.add(vnc_tab, text="VNC")
 
 
-def main() -> None:
-    app = MasterControlApp()
+def launch_legacy() -> None:
+    app = LegacyMasterControlApp()
     app.mainloop()
+
+
+def launch_preview() -> None:
+    from tools.master_control import MasterControlApp
+
+    app = MasterControlApp()
+    app.run()
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Capstone Master Control launcher")
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Launch the legacy interface with RC control and VNC tabs.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.legacy:
+        launch_legacy()
+    else:
+        launch_preview()
 
 
 if __name__ == "__main__":
