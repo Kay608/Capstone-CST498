@@ -776,17 +776,61 @@ class IntegratedRecognitionSystem:
                 
                 # Log detections
                 if face_results or sign_results:
+                    recognized_people: List[str] = []
+                    seen_identities = set()
+
                     if face_results:
                         for result in face_results:
                             status = "granted" if result["matched"] else "denied"
-                            banner_info = f" (Banner ID: {result.get('banner_id', 'N/A')})" if result.get('banner_id') else ""
-                            logger.info(f"Face {status}: {result['name']}{banner_info} - Confidence: {result['confidence']:.2f}")
+                            banner_id = result.get('banner_id')
+                            banner_label = banner_id or "Unknown"
+                            banner_info = f" (Banner ID: {banner_label})" if result["matched"] else ""
+                            logger.info(
+                                "Face %s: %s%s - Confidence: %.2f",
+                                status,
+                                result['name'],
+                                banner_info,
+                                result['confidence'],
+                            )
+                            if result["matched"]:
+                                identity_key = (result['name'], banner_label)
+                                if identity_key not in seen_identities:
+                                    seen_identities.add(identity_key)
+                                    recognized_people.append(f"{result['name']} (Banner ID: {banner_label})")
                         faces_since_log += len(face_results)
-                    
+
                     if sign_results:
+                        person_logged = False
                         for detection in sign_results:
-                            logger.info(f"Sign detected: {detection['class_name']} ({detection['confidence']:.2f})")
-                        signs_since_log += len(sign_results)
+                            class_name = detection['class_name']
+                            confidence = detection['confidence']
+                            if class_name.lower() == "person":
+                                if recognized_people and not person_logged:
+                                    logger.info(
+                                        "Person recognized: %s [detector confidence %.2f]",
+                                        ", ".join(recognized_people),
+                                        confidence,
+                                    )
+                                    person_logged = True
+                                elif not recognized_people:
+                                    logger.info(
+                                        "Person detected but not recognized (confidence %.2f)",
+                                        confidence,
+                                    )
+                                signs_since_log += 1
+                                continue
+
+                            logger.info(
+                                "Sign detected: %s (%.2f)",
+                                class_name,
+                                confidence,
+                            )
+                            signs_since_log += 1
+
+                        if recognized_people and not person_logged:
+                            logger.info("Person recognized: %s", ", ".join(recognized_people))
+                    elif recognized_people:
+                        logger.info("Person recognized: %s", ", ".join(recognized_people))
 
                 now = time.time()
                 if now - last_status_log >= status_interval:

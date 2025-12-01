@@ -309,10 +309,14 @@ class HarnessFrame(ttk.Frame):
             return
         meta['active'] = False
         self._stop_log_stream(job_key)
+        log_path = meta.get('log')
+        log_host = meta.get('host')
         window = meta.get('window')
         if window and window.winfo_exists():
             window.destroy()
         self._log_windows.pop(job_key, None)
+        if log_path and job_key == INTEGRATED_JOB_KEY:
+            self._truncate_log_file(str(log_path), host=log_host if isinstance(log_host, str) else None)
 
     def _start_log_stream(self, job_key: str) -> None:
         self._stop_log_stream(job_key)
@@ -415,6 +419,46 @@ class HarnessFrame(ttk.Frame):
         if meta:
             meta['thread'] = None
             meta['stop_event'] = None
+
+    def _truncate_log_file(self, log_path: str, *, host: Optional[str] = None) -> None:
+        path_obj = Path(log_path)
+
+        if host:
+            user = self.remote_user.get().strip() or "root1"
+            password = self.remote_password.get()
+
+            def _remote_worker() -> None:
+                client: Optional[paramiko.SSHClient] = None
+                try:
+                    client = paramiko.SSHClient()
+                    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    client.connect(hostname=host, username=user, password=password, timeout=10)
+                    quoted = shlex.quote(log_path)
+                    command = f"bash -lc \"(truncate -s 0 {quoted}) 2>/dev/null || : > {quoted}\""
+                    stdin, stdout, stderr = client.exec_command(command)
+                    stdout.channel.recv_exit_status()
+                    self.log(f"[CONTROL] Cleared remote log {log_path}")
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"[CONTROL] Failed to clear remote log {log_path}: {exc}", error=True)
+                finally:
+                    if client is not None:
+                        with suppress(Exception):
+                            client.close()
+
+            threading.Thread(target=_remote_worker, daemon=True).start()
+            return
+
+        def _local_worker() -> None:
+            try:
+                if path_obj.exists():
+                    path_obj.write_text("")
+                    self.log(f"Cleared log {log_path}")
+                else:
+                    self.log(f"Log file {log_path} not found; nothing to clear")
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"Failed to clear log {log_path}: {exc}", error=True)
+
+        threading.Thread(target=_local_worker, daemon=True).start()
 
     def _append_log_text(self, meta: Dict[str, Any], text: str) -> None:
         widget = meta.get('text')
