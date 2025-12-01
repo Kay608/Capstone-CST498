@@ -82,6 +82,63 @@ class ManualControlFrame(ttk.Frame):
         self._build_ui()
         self._register_keybindings()
 
+    # --- HTTP helpers --------------------------------------------------
+    def _remote_headers(self) -> Dict[str, str]:
+        token = self.api_key.get().strip()
+        headers: Dict[str, str] = {}
+        if token:
+            headers["X-Api-Key"] = token
+        return headers
+
+    def _remote_request(self, method: str, path: str, *, timeout: float = 5.0, **kwargs) -> requests.Response:
+        headers = kwargs.pop("headers", None) or self._remote_headers()
+        candidates = self._candidate_base_urls()
+        if not candidates:
+            raise requests.RequestException("No remote endpoints configured")
+
+        last_exc: Optional[requests.RequestException] = None
+        for base in candidates:
+            url = base + path
+            try:
+                response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
+                response.raise_for_status()
+            except requests.RequestException as exc:  # noqa: BLE001
+                last_exc = exc
+                continue
+
+            self._last_remote_base = base.rstrip('/')
+            host, _ = self._split_host_port(base)
+            if self._is_ipv4(host) and self._ssh_discovered_ip != host:
+                self._ssh_discovered_ip = host
+                self.after(0, lambda h=host: self.ssh_host.set(h))
+            if base != self.api_base.get().strip():
+                self.after(0, lambda b=base: self.api_base.set(b))
+            return response
+
+        if last_exc:
+            raise last_exc
+        raise requests.RequestException("Remote request failed")
+
+    def _post_async(self, path: str, payload: Optional[Dict[str, object]], description: Optional[str]) -> None:
+        def worker() -> None:
+            try:
+                response = self._remote_request("POST", path, json=payload, timeout=5)
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else "?"
+                body = exc.response.json() if exc.response is not None else {}
+                self._log(f"⚠️ Request failed ({status}): {body or exc}")
+            except requests.RequestException as exc:  # noqa: BLE001
+                self._log(f"⚠️ Request error: {exc}")
+            else:
+                if description:
+                    try:
+                        payload_desc = response.json()
+                    except Exception:  # noqa: BLE001
+                        payload_desc = response.text
+                    self._log(f"✅ {description} -> {payload_desc}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
     # --- UI construction -------------------------------------------------
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
