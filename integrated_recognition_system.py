@@ -629,6 +629,16 @@ class IntegratedRecognitionSystem:
         logger.info("Starting integrated recognition system...")
         logger.info(f"Face recognition: {'✓' if self.enable_face_recognition else '✗'}")
         logger.info(f"Sign detection: {'✓' if self.enable_sign_detection else '✗'}")
+
+        auto_headless = False
+        if (
+            not headless
+            and sys.platform != "win32"
+            and not os.environ.get("DISPLAY")
+        ):
+            logger.warning("No DISPLAY detected; enabling headless mode automatically")
+            headless = True
+            auto_headless = True
         
         # Initialize camera
         if not self._initialize_camera(camera_index):
@@ -758,8 +768,17 @@ class IntegratedRecognitionSystem:
                 # Display frame
                 if not headless:
                     annotated_frame = self.annotate_frame(frame, face_results, sign_results)
-                    cv2.imshow("Integrated Recognition System", annotated_frame)
-                    
+                    try:
+                        cv2.imshow("Integrated Recognition System", annotated_frame)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "OpenCV GUI unavailable (%s); switching to headless mode", exc
+                        )
+                        headless = True
+                        if not auto_headless:
+                            cv2.destroyAllWindows()
+                        continue
+
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord('q'):
                         break
@@ -784,7 +803,10 @@ class IntegratedRecognitionSystem:
                 except Exception:  # noqa: BLE001
                     pass
                 self.picamera = None
-            cv2.destroyAllWindows()
+            try:
+                cv2.destroyAllWindows()
+            except Exception:  # noqa: BLE001
+                pass
             logger.info("Integrated system stopped")
 
 def parse_args():
