@@ -58,6 +58,12 @@ except ImportError as e:
     print(f"Warning: Sign detection not available: {e}")
     SIGN_DETECTION_AVAILABLE = False
 
+try:
+    from picamera2 import Picamera2  # type: ignore[import-not-found]
+    PICAMERA2_AVAILABLE = True
+except ImportError:
+    PICAMERA2_AVAILABLE = False
+
 # Configure logging for both console and file tailing by the harness
 LOG_PATH = Path("/tmp/integrated_recognition_gui.log")
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -104,6 +110,9 @@ class IntegratedRecognitionSystem:
         self.robot_interface = None
         self.face_engine = None
         self.cache_first = cache_first
+        self.picamera: Optional[Any] = None
+        self.camera_backend: Optional[str] = None
+        self.use_robot_hardware = use_robot_hardware
         
         # Timing and persistence settings
         self.FACE_PERSISTENCE_TIME = 3.0
@@ -195,6 +204,33 @@ class IntegratedRecognitionSystem:
             finally:
                 self.camera = None
 
+        if self.picamera is not None:
+            try:
+                self.picamera.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                self.picamera = None
+
+        # Prefer Picamera2 when running on hardware and available
+        if self.use_robot_hardware and PICAMERA2_AVAILABLE:
+            try:
+                logger.info("Attempting to open camera via Picamera2 backend")
+                picam = Picamera2()
+                config = picam.create_preview_configuration(
+                    main={"format": "RGB888", "size": (640, 480)}
+                )
+                picam.configure(config)
+                picam.start()
+                time.sleep(0.5)
+                self.picamera = picam
+                self.camera_backend = "picamera2"
+                logger.info("Camera initialized using Picamera2 backend")
+                return True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Picamera2 initialization failed: %s", exc)
+                self.picamera = None
+
         backend_options = [("DEFAULT", None)]
         if hasattr(cv2, "CAP_V4L2"):
             backend_options.append(("CAP_V4L2", cv2.CAP_V4L2))
@@ -233,6 +269,7 @@ class IntegratedRecognitionSystem:
 
                 self.camera = camera
                 self._warmup_camera()
+                self.camera_backend = "opencv"
                 logger.info(
                     "Camera initialized on index %s using backend %s", camera_index, backend_name
                 )
@@ -252,6 +289,7 @@ class IntegratedRecognitionSystem:
                 if camera.isOpened():
                     self.camera = camera
                     self._warmup_camera()
+                    self.camera_backend = "opencv"
                     logger.info("Camera initialized using explicit path %s", device_path)
                     return True
                 camera.release()
@@ -260,6 +298,7 @@ class IntegratedRecognitionSystem:
                 logger.warning("Device path open raised %s", exc)
 
         logger.error("Camera initialization failed on all backends for index %s", camera_index)
+        self.camera_backend = None
         return False
 
     def _warmup_camera(self, discard_frames: int = 10, delay: float = 0.05) -> None:
@@ -529,24 +568,63 @@ class IntegratedRecognitionSystem:
 
         try:
             while True:
-                ret, frame = self.camera.read()
-                if not ret or frame is None:
-                    failure_count += 1
-                    logger.warning(
-                        "Camera read failed (attempt %s/%s)",
-                        failure_count,
-                        max_failures_before_reinit,
-                    )
-                    if failure_count >= max_failures_before_reinit:
-                        logger.error("Camera read repeatedly failed; attempting reinitialization")
-                        if not self._initialize_camera(camera_index):
-                            logger.error("Camera reinitialization unsuccessful; stopping system")
-                            break
-                        failure_count = 0
-                    time.sleep(0.1)
-                    continue
+                frame = None
 
-                failure_count = 0
+                if self.camera_backend == "picamera2" and self.picamera is not None:
+                    try:
+                        frame = self.picamera.capture_array()
+                        if frame is None:
+                            raise RuntimeError("Picamera2 returned no frame")
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        failure_count = 0
+                    except Exception as exc:  # noqa: BLE001
+                        failure_count += 1
+                        logger.warning(
+                            "Picamera2 capture failed (attempt %s/%s): %s",
+                            failure_count,
+                            max_failures_before_reinit,
+                            exc,
+                        )
+                        if failure_count >= max_failures_before_reinit:
+                            logger.error(
+                                "Picamera2 capture repeatedly failed; attempting reinitialization"
+                            )
+                            if not self._initialize_camera(camera_index):
+                                logger.error(
+                                    "Camera reinitialization unsuccessful; stopping system"
+                                )
+                                break
+                            failure_count = 0
+                        time.sleep(0.1)
+                        continue
+
+                else:
+                    if self.camera is None:
+                        logger.error("OpenCV camera backend unavailable; stopping system")
+                        break
+
+                    ret, frame = self.camera.read()
+                    if not ret or frame is None:
+                        failure_count += 1
+                        logger.warning(
+                            "Camera read failed (attempt %s/%s)",
+                            failure_count,
+                            max_failures_before_reinit,
+                        )
+                        if failure_count >= max_failures_before_reinit:
+                            logger.error(
+                                "Camera read repeatedly failed; attempting reinitialization"
+                            )
+                            if not self._initialize_camera(camera_index):
+                                logger.error(
+                                    "Camera reinitialization unsuccessful; stopping system"
+                                )
+                                break
+                            failure_count = 0
+                        time.sleep(0.1)
+                        continue
+
+                    failure_count = 0
                 
                 # Analyze frame
                 face_results = self.analyze_faces(frame)
@@ -592,6 +670,12 @@ class IntegratedRecognitionSystem:
         finally:
             if self.camera:
                 self.camera.release()
+            if self.picamera is not None:
+                try:
+                    self.picamera.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.picamera = None
             cv2.destroyAllWindows()
             logger.info("Integrated system stopped")
 
