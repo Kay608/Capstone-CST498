@@ -195,7 +195,7 @@ class IntegratedRecognitionSystem:
             finally:
                 self.camera = None
 
-        backend_options = []
+        backend_options = [("DEFAULT", None)]
         if hasattr(cv2, "CAP_V4L2"):
             backend_options.append(("CAP_V4L2", cv2.CAP_V4L2))
         backend_options.append(("CAP_ANY", cv2.CAP_ANY))
@@ -205,7 +205,10 @@ class IntegratedRecognitionSystem:
                 logger.info(
                     "Attempting to open camera index %s via %s backend", camera_index, backend_name
                 )
-                camera = cv2.VideoCapture(camera_index, backend_flag)
+                if backend_flag is None:
+                    camera = cv2.VideoCapture(camera_index)
+                else:
+                    camera = cv2.VideoCapture(camera_index, backend_flag)
 
                 if not camera.isOpened():
                     camera.release()
@@ -239,6 +242,22 @@ class IntegratedRecognitionSystem:
                 logger.warning(
                     "Camera initialization error on backend %s: %s", backend_name, exc
                 )
+
+        # Fallback: try explicit device path if it exists (some OpenCV builds require this)
+        device_path = Path(f"/dev/video{camera_index}")
+        if device_path.exists():
+            try:
+                logger.info("Attempting to open camera via explicit path %s", device_path)
+                camera = cv2.VideoCapture(str(device_path))
+                if camera.isOpened():
+                    self.camera = camera
+                    self._warmup_camera()
+                    logger.info("Camera initialized using explicit path %s", device_path)
+                    return True
+                camera.release()
+                logger.warning("Explicit device path %s failed to open", device_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Device path open raised %s", exc)
 
         logger.error("Camera initialization failed on all backends for index %s", camera_index)
         return False
