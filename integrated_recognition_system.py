@@ -58,11 +58,47 @@ except ImportError as e:
     print(f"Warning: Sign detection not available: {e}")
     SIGN_DETECTION_AVAILABLE = False
 
-try:
-    from picamera2 import Picamera2  # type: ignore[import-not-found]
+PICAMERA2_AVAILABLE = False
+PICAMERA2_IMPORT_ERROR: Optional[str] = None
+
+
+def _attempt_picamera2_import() -> bool:
+    global Picamera2  # type: ignore[reportUndefinedVariable]
+    global PICAMERA2_IMPORT_ERROR
+    try:
+        from picamera2 import Picamera2  # type: ignore[import-not-found]
+        PICAMERA2_IMPORT_ERROR = None
+        return True
+    except ImportError as exc:
+        PICAMERA2_IMPORT_ERROR = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        PICAMERA2_IMPORT_ERROR = str(exc)
+    return False
+
+
+if _attempt_picamera2_import():
     PICAMERA2_AVAILABLE = True
-except ImportError:
-    PICAMERA2_AVAILABLE = False
+else:
+    for candidate in (
+        Path("/usr/lib/python3/dist-packages"),
+        Path("/usr/local/lib/python3/dist-packages"),
+        Path(f"/usr/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages"),
+        Path(f"/usr/local/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages"),
+    ):
+        if not candidate.exists():
+            continue
+        candidate_str = str(candidate)
+        if candidate_str not in sys.path:
+            sys.path.append(candidate_str)
+        if _attempt_picamera2_import():
+            PICAMERA2_AVAILABLE = True
+            break
+
+if not PICAMERA2_AVAILABLE:
+    try:
+        from picamera2 import Picamera2  # type: ignore[import-not-found]
+    except ImportError as exc:  # noqa: F401
+        PICAMERA2_IMPORT_ERROR = str(exc)
 
 # Configure logging for both console and file tailing by the harness
 LOG_PATH = Path("/tmp/integrated_recognition_gui.log")
@@ -78,6 +114,9 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+if not PICAMERA2_AVAILABLE and PICAMERA2_IMPORT_ERROR:
+    logger.warning("Picamera2 module not available: %s", PICAMERA2_IMPORT_ERROR)
 
 class IntegratedRecognitionSystem:
     """
