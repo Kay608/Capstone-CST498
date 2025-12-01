@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -48,11 +49,20 @@ DEFAULT_REMOTE_PORT = 5001
 # Prioritize the hotspot's mDNS hostname before other fallbacks.
 HOST_FALLBACKS = ("raspberrypi.local", "raspberrypi")
 INTEGRATED_JOB_KEY = "integrated_recognition"
-LOG_POLL_INTERVAL_MS = 2000
 
 
 class HarnessFrame(ttk.Frame):
-    def __init__(self, master: tk.Misc, *, set_window_chrome: bool = False) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        set_window_chrome: bool = False,
+        remote_base_var: Optional[tk.StringVar] = None,
+        remote_api_key_var: Optional[tk.StringVar] = None,
+        remote_host_var: Optional[tk.StringVar] = None,
+        remote_user_var: Optional[tk.StringVar] = None,
+        remote_password_var: Optional[tk.StringVar] = None,
+    ) -> None:
         super().__init__(master)
         self.root = self.winfo_toplevel()
         if set_window_chrome and hasattr(self.root, "title"):
@@ -60,11 +70,41 @@ class HarnessFrame(ttk.Frame):
             self.root.geometry("660x600")
 
         self.mode = tk.StringVar(self, value="simulation")
-        self.remote_base = tk.StringVar(self, value="http://raspberrypi.local:5001")
-        self.remote_api_key = tk.StringVar(self, value="")
-        self.remote_host = tk.StringVar(self, value="raspberrypi.local")
-        self.remote_user = tk.StringVar(self, value="root1")
-        self.remote_password = tk.StringVar(self, value="")
+
+        default_base = "http://raspberrypi.local:5001"
+        default_host = "raspberrypi.local"
+        default_user = "root1"
+
+        if remote_base_var is None:
+            self.remote_base = tk.StringVar(self, value=default_base)
+        else:
+            self.remote_base = remote_base_var
+            if not self.remote_base.get():
+                self.remote_base.set(default_base)
+
+        if remote_api_key_var is None:
+            self.remote_api_key = tk.StringVar(self, value="")
+        else:
+            self.remote_api_key = remote_api_key_var
+
+        if remote_host_var is None:
+            self.remote_host = tk.StringVar(self, value=default_host)
+        else:
+            self.remote_host = remote_host_var
+            if not self.remote_host.get():
+                self.remote_host.set(default_host)
+
+        if remote_user_var is None:
+            self.remote_user = tk.StringVar(self, value=default_user)
+        else:
+            self.remote_user = remote_user_var
+            if not self.remote_user.get():
+                self.remote_user.set(default_user)
+
+        if remote_password_var is None:
+            self.remote_password = tk.StringVar(self, value="")
+        else:
+            self.remote_password = remote_password_var
         self._control_inputs: List[tk.Widget] = []
         self._last_remote_base: Optional[str] = None
         self._ssh_discovered_ip: Optional[str] = None
@@ -208,142 +248,180 @@ class HarnessFrame(ttk.Frame):
 
     def _ensure_log_window(self, job_key: str, title: str, host: str, log_path: str) -> None:
         meta = self._log_windows.get(job_key)
-        window_exists = bool(meta and meta.get("window") and meta["window"].winfo_exists())
+        window_exists = bool(meta and meta.get('window') and meta['window'].winfo_exists())
         if not window_exists:
             top = tk.Toplevel(self.root)
-            top.title(f"{title} Logs")
-            top.geometry("720x480")
-            top.protocol("WM_DELETE_WINDOW", lambda key=job_key: self._close_log_window(key))
-            text_widget = ScrolledText(top, wrap="word", state="disabled")
-            text_widget.pack(fill="both", expand=True)
+            top.title(f'{title} Logs')
+            top.geometry('720x480')
+            top.protocol('WM_DELETE_WINDOW', lambda key=job_key: self._close_log_window(key))
+            text_widget = ScrolledText(top, wrap='word', state='disabled')
+            text_widget.pack(fill='both', expand=True)
             meta = {
-                "window": top,
-                "text": text_widget,
-                "host": host,
-                "log": log_path,
-                "position": 0,
-                "fetching": False,
-                "active": True,
-                "last_error": None,
+                'window': top,
+                'text': text_widget,
+                'host': host,
+                'log': log_path,
+                'thread': None,
+                'stop_event': None,
+                'active': True,
+                'last_error': None,
             }
             self._log_windows[job_key] = meta
         else:
-            top = meta["window"]  # type: ignore[index]
-            if meta["text"].winfo_exists():  # type: ignore[index]
+            top = meta['window']  # type: ignore[index]
+            if meta['text'].winfo_exists():  # type: ignore[index]
                 self._clear_log_widget(meta)
+            self._stop_log_stream(job_key)
             meta.update({
-                "host": host,
-                "log": log_path,
-                "position": 0,
-                "active": True,
-                "last_error": None,
-                "fetching": False,
+                'host': host,
+                'log': log_path,
+                'active': True,
+                'last_error': None,
             })
-        top = meta["window"]  # type: ignore[index]
+        top = meta['window']  # type: ignore[index]
         if top.winfo_viewable():
             top.lift()
         else:
             top.deiconify()
             top.lift()
-        self._schedule_log_fetch(job_key, 0)
+        self._start_log_stream(job_key)
 
     def _clear_log_widget(self, meta: Dict[str, Any]) -> None:
-        widget = meta.get("text")
+        widget = meta.get('text')
         if not widget or not widget.winfo_exists():
             return
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        widget.configure(state="disabled")
+        widget.configure(state='normal')
+        widget.delete('1.0', 'end')
+        widget.configure(state='disabled')
 
     def _close_log_window(self, job_key: str) -> None:
         meta = self._log_windows.get(job_key)
         if not meta:
             return
-        meta["active"] = False
-        window = meta.get("window")
+        meta['active'] = False
+        self._stop_log_stream(job_key)
+        window = meta.get('window')
         if window and window.winfo_exists():
             window.destroy()
         self._log_windows.pop(job_key, None)
 
-    def _schedule_log_fetch(self, job_key: str, delay_ms: int) -> None:
+    def _start_log_stream(self, job_key: str) -> None:
+        self._stop_log_stream(job_key)
         meta = self._log_windows.get(job_key)
-        if not meta or not meta.get("active", False):
+        if not meta or not meta.get('active', False):
             return
-        if delay_ms <= 0:
-            self._request_log_update(job_key)
-        else:
-            self.after(delay_ms, lambda key=job_key: self._request_log_update(key))
+        stop_event = threading.Event()
+        meta['stop_event'] = stop_event
+        thread = threading.Thread(target=self._log_stream_worker, args=(job_key, stop_event), daemon=True)
+        meta['thread'] = thread
+        thread.start()
 
-    def _request_log_update(self, job_key: str) -> None:
+    def _stop_log_stream(self, job_key: str) -> None:
         meta = self._log_windows.get(job_key)
-        if not meta or not meta.get("active", False):
+        if not meta:
             return
-        if meta.get("fetching"):
-            return
-        meta["fetching"] = True
-        threading.Thread(target=self._log_fetch_worker, args=(job_key,), daemon=True).start()
+        stop_event = meta.get('stop_event')
+        if isinstance(stop_event, threading.Event):
+            stop_event.set()
+        thread = meta.get('thread')
+        if isinstance(thread, threading.Thread) and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+        meta['thread'] = None
+        meta['stop_event'] = None
 
-    def _log_fetch_worker(self, job_key: str) -> None:
-        meta = self._log_windows.get(job_key)
-        if not meta or not meta.get("active", False):
-            return
-        host = meta.get("host") or self.remote_host.get().strip()
-        job_info = self._remote_jobs.get(job_key, {})
-        if job_info.get("host"):
-            host = job_info["host"]
-        user = self.remote_user.get().strip() or "root1"
-        password = self.remote_password.get()
-        log_path = meta.get("log")
-        position = int(meta.get("position", 0))
-        if not host or not log_path:
-            self.after(0, lambda: self._handle_log_error(job_key, "Missing host or log path"))
-            meta["fetching"] = False
-            return
-
-        data = ""
-        new_position = position
-        error_message: Optional[str] = None
-        try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(hostname=host, username=user, password=password, timeout=10)
-            sftp = client.open_sftp()
-            with sftp.file(log_path, "r") as remote_file:
-                remote_file.seek(position)
-                chunk = remote_file.read()
-                if chunk:
-                    data = chunk.decode("utf-8", errors="replace")
-                new_position = remote_file.tell()
-            sftp.close()
-            client.close()
-        except Exception as exc:  # noqa: BLE001
-            error_message = str(exc)
-
-        def _finalize() -> None:
+    def _log_stream_worker(self, job_key: str, stop_event: threading.Event) -> None:
+        backoff = 2.0
+        while not stop_event.is_set():
             meta = self._log_windows.get(job_key)
-            if not meta:
-                return
-            meta["fetching"] = False
-            if error_message:
-                self._handle_log_error(job_key, error_message)
-            else:
-                if data:
-                    self._append_log_text(meta, data)
-                meta["position"] = new_position
-                meta["last_error"] = None
-            if meta.get("active", False):
-                self._schedule_log_fetch(job_key, LOG_POLL_INTERVAL_MS)
+            if not meta or not meta.get('active', False):
+                break
+            host = meta.get('host') or self.remote_host.get().strip()
+            job_info = self._remote_jobs.get(job_key, {})
+            if job_info.get('host'):
+                host = job_info['host']
+            user = self.remote_user.get().strip() or 'root1'
+            password = self.remote_password.get()
+            log_path = meta.get('log')
+            if not host or not log_path:
+                self.after(0, lambda key=job_key: self._handle_log_error(key, 'Missing host or log path'))
+                break
 
-        self.after(0, _finalize)
+            client: Optional[paramiko.SSHClient] = None
+            channel = None
+            try:
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(hostname=host, username=user, password=password, timeout=10)
+                transport = client.get_transport()
+                if transport is None:
+                    raise RuntimeError('SSH transport unavailable')
+                channel = transport.open_session()
+                command = f'tail -n 200 -F {shlex.quote(str(log_path))}'
+                channel.exec_command(command)
+
+                while not stop_event.is_set():
+                    if channel.recv_ready():
+                        chunk = channel.recv(4096)
+                        if chunk:
+                            text = chunk.decode('utf-8', errors='replace')
+                            self.after(0, lambda t=text, key=job_key: self._append_log_text_for_job(key, t))
+                    if channel.recv_stderr_ready():
+                        err = channel.recv_stderr(1024)
+                        if err:
+                            message = err.decode('utf-8', errors='replace').strip()
+                            if message:
+                                self.after(0, lambda key=job_key, msg=message: self._handle_log_error(key, msg))
+                    if channel.exit_status_ready():
+                        exit_status = channel.recv_exit_status()
+                        if exit_status != 0:
+                            self.after(0, lambda key=job_key, status=exit_status: self._handle_log_error(key, f'tail exited with status {status}'))
+                        break
+                    if stop_event.wait(0.2):
+                        break
+
+                backoff = 2.0
+            except Exception as exc:  # noqa: BLE001
+                self.after(0, lambda key=job_key, msg=str(exc): self._handle_log_error(key, msg))
+                if stop_event.wait(backoff):
+                    break
+                backoff = min(backoff * 2, 30.0)
+            finally:
+                if channel is not None:
+                    try:
+                        channel.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if client is not None:
+                    try:
+                        client.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            if stop_event.is_set():
+                break
+            if stop_event.wait(1.0):
+                break
+
+        meta = self._log_windows.get(job_key)
+        if meta:
+            meta['thread'] = None
+            meta['stop_event'] = None
 
     def _append_log_text(self, meta: Dict[str, Any], text: str) -> None:
-        widget = meta.get("text")
+        widget = meta.get('text')
         if not widget or not widget.winfo_exists():
             return
-        widget.configure(state="normal")
-        widget.insert("end", text)
-        widget.see("end")
-        widget.configure(state="disabled")
+        widget.configure(state='normal')
+        widget.insert('end', text)
+        widget.see('end')
+        widget.configure(state='disabled')
+
+    def _append_log_text_for_job(self, job_key: str, text: str) -> None:
+        meta = self._log_windows.get(job_key)
+        if not meta or not meta.get('active', False):
+            return
+        self._append_log_text(meta, text)
+        meta['last_error'] = None
 
     def _handle_log_error(self, job_key: str, message: str) -> None:
         meta = self._log_windows.get(job_key)
@@ -753,16 +831,22 @@ class HarnessFrame(ttk.Frame):
         host, port = self._split_host_port(raw)
 
         entries: List[str] = []
-        if raw:
-            entries.append(raw)
-        else:
-            entries.append(f"http://{host}:{port}")
+
+        # Prefer the most recently successful endpoint and any detected IPv4 first.
+        if self._ssh_discovered_ip:
+            entries.append(f"http://{self._ssh_discovered_ip}:{port}")
 
         if self._last_remote_base:
             entries.append(self._last_remote_base)
 
-        if self._ssh_discovered_ip:
-            entries.append(f"http://{self._ssh_discovered_ip}:{port}")
+        detected_host = self.remote_host.get().strip()
+        if detected_host and self._is_ipv4(detected_host):
+            entries.append(f"http://{detected_host}:{port}")
+
+        if raw:
+            entries.append(raw)
+        else:
+            entries.append(f"http://{host}:{port}")
 
         for alias in HOST_FALLBACKS:
             entries.append(f"http://{alias}:{port}")

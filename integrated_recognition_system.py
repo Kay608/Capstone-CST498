@@ -58,8 +58,19 @@ except ImportError as e:
     print(f"Warning: Sign detection not available: {e}")
     SIGN_DETECTION_AVAILABLE = False
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging for both console and file tailing by the harness
+LOG_PATH = Path("/tmp/integrated_recognition_gui.log")
+LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(LOG_PATH, mode="w", encoding="utf-8"),
+    ],
+)
 logger = logging.getLogger(__name__)
 
 class IntegratedRecognitionSystem:
@@ -176,22 +187,79 @@ class IntegratedRecognitionSystem:
     
     def _initialize_camera(self, camera_index=0):
         """Initialize camera for video capture."""
-        try:
-            self.camera = cv2.VideoCapture(camera_index)
-            if not self.camera.isOpened():
-                raise Exception(f"Cannot open camera {camera_index}")
-            
-            # Set camera properties for better performance
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            self.camera.set(cv2.CAP_PROP_FPS, 30)
-            
-            logger.info(f"Camera initialized on index {camera_index}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Camera initialization failed: {e}")
-            return False
+        # Release any existing camera before reinitializing
+        if self.camera is not None:
+            try:
+                if self.camera.isOpened():
+                    self.camera.release()
+            finally:
+                self.camera = None
+
+        backend_options = []
+        if hasattr(cv2, "CAP_V4L2"):
+            backend_options.append(("CAP_V4L2", cv2.CAP_V4L2))
+        backend_options.append(("CAP_ANY", cv2.CAP_ANY))
+
+        for backend_name, backend_flag in backend_options:
+            try:
+                logger.info(
+                    "Attempting to open camera index %s via %s backend", camera_index, backend_name
+                )
+                camera = cv2.VideoCapture(camera_index, backend_flag)
+
+                if not camera.isOpened():
+                    camera.release()
+                    logger.warning(
+                        "Camera index %s failed to open on backend %s", camera_index, backend_name
+                    )
+                    continue
+
+                # Set camera properties tuned for the Pi bridge driver
+                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                camera.set(cv2.CAP_PROP_FPS, 30)
+                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+                # Prefer MJPEG when available to reduce USB bandwidth
+                try:
+                    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+                    if not camera.set(cv2.CAP_PROP_FOURCC, fourcc):
+                        logger.debug("Camera backend %s rejected MJPG fourcc", backend_name)
+                except Exception:  # noqa: BLE001
+                    logger.debug("Camera backend %s does not support MJPG negotiation", backend_name)
+
+                self.camera = camera
+                self._warmup_camera()
+                logger.info(
+                    "Camera initialized on index %s using backend %s", camera_index, backend_name
+                )
+                return True
+
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Camera initialization error on backend %s: %s", backend_name, exc
+                )
+
+        logger.error("Camera initialization failed on all backends for index %s", camera_index)
+        return False
+
+    def _warmup_camera(self, discard_frames: int = 10, delay: float = 0.05) -> None:
+        """Allow the sensor/ISP pipeline to stabilise before main capture."""
+        if self.camera is None:
+            return
+
+        grabbed = 0
+        for _ in range(discard_frames):
+            ret, _ = self.camera.read()
+            if not ret:
+                break
+            grabbed += 1
+            time.sleep(delay)
+
+        if grabbed == 0:
+            logger.warning("Camera warmup returned zero frames; capture may still be starting up")
+        else:
+            logger.info("Camera warmup complete; discarded %s frame(s)", grabbed)
     
     def analyze_faces(self, frame):
         """
@@ -437,12 +505,29 @@ class IntegratedRecognitionSystem:
         
         logger.info("Integrated system active. Press 'q' to quit, 's' to save frame.")
         
+        failure_count = 0
+        max_failures_before_reinit = 5
+
         try:
             while True:
                 ret, frame = self.camera.read()
-                if not ret:
-                    logger.error("Failed to grab frame")
-                    break
+                if not ret or frame is None:
+                    failure_count += 1
+                    logger.warning(
+                        "Camera read failed (attempt %s/%s)",
+                        failure_count,
+                        max_failures_before_reinit,
+                    )
+                    if failure_count >= max_failures_before_reinit:
+                        logger.error("Camera read repeatedly failed; attempting reinitialization")
+                        if not self._initialize_camera(camera_index):
+                            logger.error("Camera reinitialization unsuccessful; stopping system")
+                            break
+                        failure_count = 0
+                    time.sleep(0.1)
+                    continue
+
+                failure_count = 0
                 
                 # Analyze frame
                 face_results = self.analyze_faces(frame)

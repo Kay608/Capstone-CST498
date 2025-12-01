@@ -14,22 +14,63 @@ import requests
 class ManualControlFrame(ttk.Frame):
     """Reusable frame that provides the rover manual control UI."""
 
-    def __init__(self, master: tk.Misc, *, set_window_chrome: bool = False) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        set_window_chrome: bool = False,
+        api_base_var: Optional[tk.StringVar] = None,
+        api_key_var: Optional[tk.StringVar] = None,
+        ssh_host_var: Optional[tk.StringVar] = None,
+        ssh_user_var: Optional[tk.StringVar] = None,
+        ssh_password_var: Optional[tk.StringVar] = None,
+    ) -> None:
         super().__init__(master)
         self.root = self.winfo_toplevel()
         if set_window_chrome and isinstance(self.root, tk.Tk):
             self.root.title("Rover RC Control")
             self.root.geometry("420x400")
 
-        self.api_base = tk.StringVar(master=self, value="http://raspberrypi.local:5001")
-        self.api_key = tk.StringVar(master=self, value="")
+        default_base = "http://raspberrypi.local:5001"
+        default_host = "raspberrypi.local"
+        default_user = "root1"
+
+        if api_base_var is None:
+            self.api_base = tk.StringVar(master=self, value=default_base)
+        else:
+            self.api_base = api_base_var
+            if not self.api_base.get():
+                self.api_base.set(default_base)
+
+        if api_key_var is None:
+            self.api_key = tk.StringVar(master=self, value="")
+        else:
+            self.api_key = api_key_var
+
         self.speed = tk.DoubleVar(master=self, value=0.4)
         self.duration = tk.DoubleVar(master=self, value=0.5)
         self.angle = tk.DoubleVar(master=self, value=90.0)
         self.servo_angle = tk.IntVar(master=self, value=90)
-        self.ssh_host = tk.StringVar(master=self, value="raspberrypi.local")
-        self.ssh_user = tk.StringVar(master=self, value="root1")
-        self.ssh_password = tk.StringVar(master=self, value="")
+
+        if ssh_host_var is None:
+            self.ssh_host = tk.StringVar(master=self, value=default_host)
+        else:
+            self.ssh_host = ssh_host_var
+            if not self.ssh_host.get():
+                self.ssh_host.set(default_host)
+
+        if ssh_user_var is None:
+            self.ssh_user = tk.StringVar(master=self, value=default_user)
+        else:
+            self.ssh_user = ssh_user_var
+            if not self.ssh_user.get():
+                self.ssh_user.set(default_user)
+
+        if ssh_password_var is None:
+            self.ssh_password = tk.StringVar(master=self, value="")
+        else:
+            self.ssh_password = ssh_password_var
+
         self.status_text = tk.StringVar(master=self, value="Idle")
         self.continuous_mode = tk.BooleanVar(master=self, value=False)
 
