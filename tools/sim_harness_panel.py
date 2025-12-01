@@ -1158,7 +1158,7 @@ class HarnessFrame(ttk.Frame):
         if self._is_control_mode():
             self._stop_remote_job(INTEGRATED_JOB_KEY, "integrated_recognition_system.py", "Integrated Recognition", quiet=True)
             self._run_remote_command(
-                "python integrated_recognition_system.py",
+                "python integrated_recognition_system.py --robot",
                 "Integrated Recognition (GUI)",
                 job_key=INTEGRATED_JOB_KEY,
                 job_pattern="integrated_recognition_system.py",
@@ -1171,7 +1171,7 @@ class HarnessFrame(ttk.Frame):
         if self._is_control_mode():
             self._stop_remote_job(INTEGRATED_JOB_KEY, "integrated_recognition_system.py", "Integrated Recognition", quiet=True)
             self._run_remote_command(
-                "python integrated_recognition_system.py --headless",
+                "python integrated_recognition_system.py --robot --headless",
                 "Integrated Recognition (Headless)",
                 job_key=INTEGRATED_JOB_KEY,
                 job_pattern="integrated_recognition_system.py",
