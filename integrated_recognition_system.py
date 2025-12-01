@@ -828,7 +828,8 @@ class IntegratedRecognitionSystem:
                         cv2.imwrite(filename, annotated_frame)
                         logger.info(f"Saved frame: {filename}")
 
-                self._update_preview_frame(annotated_frame or frame)
+                frame_for_preview = annotated_frame if annotated_frame is not None else frame
+                self._update_preview_frame(frame_for_preview)
                 
                 # Small delay for CPU
                 time.sleep(0.01)
