@@ -649,6 +649,10 @@ class IntegratedRecognitionSystem:
         
         failure_count = 0
         max_failures_before_reinit = 5
+        status_interval = 5.0
+        last_status_log = time.time()
+        faces_since_log = 0
+        signs_since_log = 0
 
         try:
             while True:
@@ -760,10 +764,30 @@ class IntegratedRecognitionSystem:
                             status = "granted" if result["matched"] else "denied"
                             banner_info = f" (Banner ID: {result.get('banner_id', 'N/A')})" if result.get('banner_id') else ""
                             logger.info(f"Face {status}: {result['name']}{banner_info} - Confidence: {result['confidence']:.2f}")
+                        faces_since_log += len(face_results)
                     
                     if sign_results:
                         for detection in sign_results:
                             logger.info(f"Sign detected: {detection['class_name']} ({detection['confidence']:.2f})")
+                        signs_since_log += len(sign_results)
+
+                now = time.time()
+                if now - last_status_log >= status_interval:
+                    if faces_since_log or signs_since_log:
+                        logger.info(
+                            "Status: faces=%d, signs=%d detected in last %.0fs",
+                            faces_since_log,
+                            signs_since_log,
+                            status_interval,
+                        )
+                    else:
+                        logger.info(
+                            "Status: no faces or signs detected in last %.0fs",
+                            status_interval,
+                        )
+                    faces_since_log = 0
+                    signs_since_log = 0
+                    last_status_log = now
                 
                 # Display frame
                 if not headless:
