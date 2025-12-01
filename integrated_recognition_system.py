@@ -251,6 +251,41 @@ class IntegratedRecognitionSystem:
             finally:
                 self.picamera = None
 
+        if (
+            self.use_robot_hardware
+            and self.robot_interface is not None
+            and hasattr(self.robot_interface, "is_available")
+            and self.robot_interface.is_available()
+            and hasattr(self.robot_interface, "get_camera_frame")
+        ):
+            logger.info("Attempting to source frames from robot interface camera feed")
+            for attempt in range(10):
+                try:
+                    frame = self.robot_interface.get_camera_frame()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Robot interface camera probe failed on attempt %s/10: %s",
+                        attempt + 1,
+                        exc,
+                    )
+                    frame = None
+
+                if frame is not None and getattr(frame, "size", 0):
+                    self.camera_backend = "robot_interface"
+                    logger.info(
+                        "Using camera provided by robot interface (backend=%s)",
+                        getattr(self.robot_interface, "camera_type", "unknown"),
+                    )
+                    return True
+
+                time.sleep(0.1)
+
+            logger.error(
+                "Robot interface camera did not deliver frames during probe; unable to start video stream"
+            )
+            self.camera_backend = None
+            return False
+
         # Prefer Picamera2 when running on hardware and available
         if self.use_robot_hardware and PICAMERA2_AVAILABLE:
             try:
@@ -609,7 +644,41 @@ class IntegratedRecognitionSystem:
             while True:
                 frame = None
 
-                if self.camera_backend == "picamera2" and self.picamera is not None:
+                if self.camera_backend == "robot_interface" and self.robot_interface is not None:
+                    try:
+                        frame = self.robot_interface.get_camera_frame()
+                    except Exception as exc:  # noqa: BLE001
+                        frame = None
+                        logger.warning(
+                            "Robot interface camera read failed (attempt %s/%s): %s",
+                            failure_count + 1,
+                            max_failures_before_reinit,
+                            exc,
+                        )
+
+                    if frame is None or getattr(frame, "size", 0) == 0:
+                        failure_count += 1
+                        logger.warning(
+                            "Robot interface camera returned no frame (attempt %s/%s)",
+                            failure_count,
+                            max_failures_before_reinit,
+                        )
+                        if failure_count >= max_failures_before_reinit:
+                            logger.error(
+                                "Robot interface camera repeatedly failed; attempting reinitialization"
+                            )
+                            if not self._initialize_camera(camera_index):
+                                logger.error(
+                                    "Camera reinitialization unsuccessful; stopping system"
+                                )
+                                break
+                            failure_count = 0
+                        time.sleep(0.1)
+                        continue
+
+                    failure_count = 0
+
+                elif self.camera_backend == "picamera2" and self.picamera is not None:
                     try:
                         frame = self.picamera.capture_array()
                         if frame is None:
@@ -707,7 +776,7 @@ class IntegratedRecognitionSystem:
             logger.info("Stopping integrated system...")
         
         finally:
-            if self.camera:
+            if self.camera and self.camera_backend != "robot_interface":
                 self.camera.release()
             if self.picamera is not None:
                 try:
