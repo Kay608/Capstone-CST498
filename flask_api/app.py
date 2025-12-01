@@ -92,6 +92,7 @@ _manual_interface = None
 _CAP_ANY = getattr(cv2, "CAP_ANY", 0)
 _CAP_V4L2 = getattr(cv2, "CAP_V4L2", _CAP_ANY)
 _CAP_GSTREAMER = getattr(cv2, "CAP_GSTREAMER", _CAP_ANY)
+INTEGRATED_PREVIEW_PATH = Path("/tmp/integrated_preview.jpg")
 
 
 def _authorize_manual_request(req) -> bool:
@@ -388,14 +389,25 @@ def manual_capture():
     if frame is None:
         capture, _ = _open_fallback_capture()
         if capture is None:
-            return jsonify({'error': _camera_status_message(interface)}), 503
-        try:
-            ok, grabbed = capture.read()
-            if not ok or grabbed is None:
-                return jsonify({'error': 'Failed to capture frame'}), 500
-            frame = grabbed
-        finally:
-            capture.release()
+            preview_frame = None
+            if INTEGRATED_PREVIEW_PATH.exists():
+                try:
+                    age = time.time() - INTEGRATED_PREVIEW_PATH.stat().st_mtime
+                    if age <= 5:
+                        preview_frame = cv2.imread(str(INTEGRATED_PREVIEW_PATH))
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[WARN] Failed to read integrated preview: {exc}")
+            if preview_frame is None:
+                return jsonify({'error': _camera_status_message(interface)}), 503
+            frame = preview_frame
+        else:
+            try:
+                ok, grabbed = capture.read()
+                if not ok or grabbed is None:
+                    return jsonify({'error': 'Failed to capture frame'}), 500
+                frame = grabbed
+            finally:
+                capture.release()
 
     success, buffer = cv2.imencode('.jpg', frame)
     if not success:

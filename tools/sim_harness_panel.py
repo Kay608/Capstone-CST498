@@ -11,6 +11,8 @@ import sys
 import threading
 import time
 import webbrowser
+from contextlib import suppress
+from subprocess import Popen
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 import tkinter as tk
@@ -116,6 +118,10 @@ class HarnessFrame(ttk.Frame):
         self._preview_photo: Optional[PhotoImage] = None
         self._preview_last_error: Optional[str] = None
         self._log_windows: Dict[str, Dict[str, Any]] = {}
+        self._flask_running_mode: Optional[str] = None
+        self._flask_local_process: Optional[Popen] = None
+        self._flask_remote: bool = False
+        self._flask_job_key = "flask_server"
 
         main = ttk.Frame(self, padding=12)
         main.pack(fill="both", expand=True)
@@ -176,12 +182,14 @@ class HarnessFrame(ttk.Frame):
         server_frame.pack(fill="x", pady=(0, 10))
         server_frame.columnconfigure((0, 1), weight=1)
 
-        ttk.Button(server_frame, text="Start Flask (Debug)", command=self.start_flask_debug).grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        ttk.Button(server_frame, text="Start Flask via Waitress", command=self.start_flask_waitress).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.btn_flask_debug = ttk.Button(server_frame, text="Start Flask (Debug)", command=lambda: self._toggle_flask_server("debug"))
+        self.btn_flask_debug.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        self.btn_flask_waitress = ttk.Button(server_frame, text="Start Flask via Waitress", command=lambda: self._toggle_flask_server("waitress"))
+        self.btn_flask_waitress.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         ttk.Button(server_frame, text="Open Enrollment Page", command=self.open_enroll_page).grid(row=1, column=0, padx=5, pady=5, sticky="ew")
         ttk.Button(server_frame, text="Check Flask Health", command=self.check_flask_api).grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        ttk.Button(server_frame, text="Start VNC Server", command=self.start_vnc_server).grid(row=2, column=0, padx=5, pady=5, sticky="ew")
-        ttk.Button(server_frame, text="Stop VNC Server", command=self.stop_vnc_server).grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        ttk.Button(server_frame, text="Open Orders Page", command=self.open_orders_page).grid(row=2, column=0, padx=5, pady=5, sticky="ew")
+        ttk.Button(server_frame, text="Open Admin Page", command=self.open_admin_page).grid(row=2, column=1, padx=5, pady=5, sticky="ew")
 
         recognition_frame = ttk.LabelFrame(main, text="Recognition & Vision")
         recognition_frame.pack(fill="x", pady=(0, 10))
@@ -208,6 +216,7 @@ class HarnessFrame(ttk.Frame):
 
         self.log("Harness ready. Use the controls above to run common workflows.")
         self._update_mode_ui()
+        self._update_flask_buttons()
 
     # ------------------------------------------------------------------
     # UI helpers
@@ -918,26 +927,147 @@ class HarnessFrame(ttk.Frame):
     # ------------------------------------------------------------------
     # Server controls
     # ------------------------------------------------------------------
-    def start_flask_debug(self) -> None:
-        if self._is_control_mode():
-            self._run_remote_command("python flask_api/app.py", "Flask (Debug)")
+    def _update_flask_buttons(self) -> None:
+        if self._flask_running_mode is None:
+            self.btn_flask_debug.configure(text="Start Flask (Debug)", state="normal")
+            self.btn_flask_waitress.configure(text="Start Flask via Waitress", state="normal")
             return
-        self.run_command_async([sys.executable, str(FLASK_API_DIR / "app.py")], "Flask (Debug)")
 
-    def start_flask_waitress(self) -> None:
-        if self._is_control_mode():
-            self._run_remote_command(
-                "python -m waitress --listen=0.0.0.0:5001 flask_api.app:app",
-                "Flask (Waitress)",
-            )
+        if self._flask_running_mode == "debug":
+            self.btn_flask_debug.configure(text="Stop Flask (Debug)", state="normal")
+            self.btn_flask_waitress.configure(text="Start Flask via Waitress", state="disabled")
+        else:
+            self.btn_flask_debug.configure(text="Start Flask (Debug)", state="disabled")
+            self.btn_flask_waitress.configure(text="Stop Flask via Waitress", state="normal")
+
+    def _toggle_flask_server(self, mode: str) -> None:
+        if self._flask_running_mode == mode:
+            self._stop_flask_server()
             return
-        self.run_command_async([
-            sys.executable,
-            "-m",
-            "waitress",
-            "--listen=0.0.0.0:5001",
-            "flask_api.app:app",
-        ], "Flask (Waitress)")
+
+        if self._flask_running_mode is not None and self._flask_running_mode != mode:
+            self.log("Flask server already running; stop it before starting another mode.", error=True)
+            self._show_error("Flask Server", "Stop the running Flask server before launching a different mode.")
+            return
+
+        self._start_flask_server(mode)
+
+    def _start_flask_server(self, mode: str) -> None:
+        if mode not in {"debug", "waitress"}:
+            raise ValueError("Unsupported Flask mode")
+
+        if self._is_control_mode():
+            self._start_flask_remote(mode)
+        else:
+            self._start_flask_local(mode)
+
+    def _start_flask_local(self, mode: str) -> None:
+        if self._flask_running_mode:
+            return
+
+        if mode == "debug":
+            command = [sys.executable, str(FLASK_API_DIR / "app.py")]
+            title = "Flask (Debug)"
+        else:
+            command = [
+                sys.executable,
+                "-m",
+                "waitress",
+                "--listen=0.0.0.0:5001",
+                "flask_api.app:app",
+            ]
+            title = "Flask (Waitress)"
+
+        def _worker() -> None:
+            try:
+                process = subprocess.Popen(command, cwd=PROJECT_ROOT, creationflags=CONSOLE_FLAG)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"{title} failed: {exc}", error=True)
+                self._show_error(title, str(exc))
+                return
+
+            self.log(f"{title} launched locally")
+
+            def _on_success() -> None:
+                self._flask_local_process = process
+                self._flask_running_mode = mode
+                self._flask_remote = False
+                self._update_flask_buttons()
+                self.after(2000, self._verify_flask_state)
+
+            self.after(0, _on_success)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_flask_remote(self, mode: str) -> None:
+        if self._flask_running_mode:
+            return
+
+        if mode == "debug":
+            command = "python flask_api/app.py"
+            title = "Flask (Debug)"
+            pattern = "flask_api/app.py"
+        else:
+            command = "python -m waitress --listen=0.0.0.0:5001 flask_api.app:app"
+            title = "Flask (Waitress)"
+            pattern = "flask_api.app:app"
+
+        self._run_remote_command(
+            command,
+            title,
+            job_key=self._flask_job_key,
+            job_pattern=pattern,
+        )
+        self._flask_running_mode = mode
+        self._flask_remote = True
+        self._flask_local_process = None
+        self._update_flask_buttons()
+        self.after(2500, self._verify_flask_state)
+
+    def _stop_flask_server(self) -> None:
+        if not self._flask_running_mode:
+            return
+
+        mode = self._flask_running_mode
+        title = "Flask (Debug)" if mode == "debug" else "Flask (Waitress)"
+
+        if self._flask_remote:
+            pattern = "flask_api/app.py" if mode == "debug" else "flask_api.app:app"
+            self._stop_remote_job(self._flask_job_key, pattern, title, quiet=False)
+            self._close_log_window(self._flask_job_key)
+        else:
+            process = self._flask_local_process
+            if process and process.poll() is None:
+                try:
+                    process.terminate()
+                    process.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    with suppress(Exception):
+                        process.kill()
+            self.log(f"{title} stopped locally")
+
+        self._flask_running_mode = None
+        self._flask_local_process = None
+        self._flask_remote = False
+        self._update_flask_buttons()
+
+    def _verify_flask_state(self) -> None:
+        if not self._flask_running_mode:
+            return
+
+        if self._flask_remote:
+            if self._flask_job_key not in self._remote_jobs:
+                self.log("Flask server did not stay running; resetting controls.", error=True)
+                self._flask_running_mode = None
+                self._flask_remote = False
+                self._update_flask_buttons()
+        else:
+            process = self._flask_local_process
+            if process and process.poll() is not None:
+                self.log("Local Flask process exited unexpectedly; resetting controls.", error=True)
+                self._flask_running_mode = None
+                self._flask_local_process = None
+                self._update_flask_buttons()
 
     def open_enroll_page(self) -> None:
         if self._is_control_mode():
@@ -949,6 +1079,22 @@ class HarnessFrame(ttk.Frame):
         else:
             webbrowser.open_new_tab("http://localhost:5001/enroll")
             self.log("Enrollment page opened in browser")
+
+    def open_orders_page(self) -> None:
+        base = self._remote_base_url() if self._is_control_mode() else "http://localhost:5001"
+        if not base:
+            return
+        webbrowser.open_new_tab(f"{base}/order")
+        target = "remote" if self._is_control_mode() else "local"
+        self.log(f"Opened {target} orders page in browser")
+
+    def open_admin_page(self) -> None:
+        base = self._remote_base_url() if self._is_control_mode() else "http://localhost:5001"
+        if not base:
+            return
+        webbrowser.open_new_tab(f"{base}/admin")
+        target = "remote" if self._is_control_mode() else "local"
+        self.log(f"Opened {target} admin page in browser")
 
     def check_flask_api(self) -> None:
         def _worker() -> None:
@@ -979,32 +1125,35 @@ class HarnessFrame(ttk.Frame):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def start_vnc_server(self) -> None:
-        if not self._is_control_mode():
-            self.log("[SIM] Start VNC Server is only available in Control mode.")
-            return
-        self._run_remote_command(
-            "bash scripts/start_vnc_server.sh",
-            "VNC Server",
-            job_key="vnc_server",
-            job_pattern="websockify",
-        )
-
-    def stop_vnc_server(self) -> None:
-        if not self._is_control_mode():
-            self.log("[SIM] Stop VNC Server is only available in Control mode.")
-            return
-        self._stop_remote_job("vnc_server", "websockify", "VNC Server", quiet=True)
-        self._run_remote_command(
-            "bash scripts/stop_vnc_server.sh",
-            "VNC Server Stop",
-            background=False,
-        )
-        self._close_log_window("vnc_server")
-
     # ------------------------------------------------------------------
     # Recognition controls
     # ------------------------------------------------------------------
+    def _schedule_integrated_log_attach(self, attempt: int = 0) -> None:
+        if attempt > 10:
+            return
+
+        job_info = self._remote_jobs.get(INTEGRATED_JOB_KEY)
+        host = None
+        if job_info:
+            host = job_info.get("host")
+        if not host:
+            host = self._ssh_discovered_ip or self.remote_host.get().strip()
+        if not host:
+            self.after(1000, lambda: self._schedule_integrated_log_attach(attempt + 1))
+            return
+
+        log_path = "/tmp/integrated_recognition_gui.log"
+        self._ensure_log_window(INTEGRATED_JOB_KEY, "Integrated Recognition", host, log_path)
+        if job_info is not None:
+            job_info["log"] = log_path
+        else:
+            self._remote_jobs[INTEGRATED_JOB_KEY] = {
+                "host": host,
+                "pattern": "integrated_recognition_system.py",
+                "title": "Integrated Recognition",
+                "log": log_path,
+            }
+
     def launch_integrated_gui(self) -> None:
         if self._is_control_mode():
             self._stop_remote_job(INTEGRATED_JOB_KEY, "integrated_recognition_system.py", "Integrated Recognition", quiet=True)
@@ -1014,6 +1163,7 @@ class HarnessFrame(ttk.Frame):
                 job_key=INTEGRATED_JOB_KEY,
                 job_pattern="integrated_recognition_system.py",
             )
+            self.after(2000, self._schedule_integrated_log_attach)
             return
         self.run_command_async([sys.executable, str(PROJECT_ROOT / "integrated_recognition_system.py")], "Integrated Recognition (GUI)")
 
@@ -1026,6 +1176,7 @@ class HarnessFrame(ttk.Frame):
                 job_key=INTEGRATED_JOB_KEY,
                 job_pattern="integrated_recognition_system.py",
             )
+            self.after(2000, self._schedule_integrated_log_attach)
             return
         self.run_command_async([
             sys.executable,

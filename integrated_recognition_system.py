@@ -104,6 +104,8 @@ if not PICAMERA2_AVAILABLE:
 LOG_PATH = Path("/tmp/integrated_recognition_gui.log")
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+PREVIEW_PATH = Path("/tmp/integrated_preview.jpg")
+
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 logging.basicConfig(
     level=logging.INFO,
@@ -152,6 +154,7 @@ class IntegratedRecognitionSystem:
         self.picamera: Optional[Any] = None
         self.camera_backend: Optional[str] = None
         self.use_robot_hardware = use_robot_hardware
+        self._last_preview_save = 0.0
         
         # Timing and persistence settings
         self.FACE_PERSISTENCE_TIME = 3.0
@@ -392,6 +395,18 @@ class IntegratedRecognitionSystem:
             logger.warning("Camera warmup returned zero frames; capture may still be starting up")
         else:
             logger.info("Camera warmup complete; discarded %s frame(s)", grabbed)
+
+    def _update_preview_frame(self, frame: Optional[Any]) -> None:
+        if frame is None:
+            return
+        now = time.time()
+        if (now - self._last_preview_save) < 0.5:
+            return
+        self._last_preview_save = now
+        try:
+            cv2.imwrite(str(PREVIEW_PATH), frame)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Preview frame save failed: %s", exc)
     
     def analyze_faces(self, frame):
         """
@@ -751,6 +766,8 @@ class IntegratedRecognitionSystem:
                 # Analyze frame
                 face_results = self.analyze_faces(frame)
                 sign_results = self.analyze_signs(frame)
+
+                annotated_frame = self.annotate_frame(frame, face_results, sign_results)
                 
                 # Update face tracking
                 if self.enable_face_recognition:
@@ -791,7 +808,6 @@ class IntegratedRecognitionSystem:
                 
                 # Display frame
                 if not headless:
-                    annotated_frame = self.annotate_frame(frame, face_results, sign_results)
                     try:
                         cv2.imshow("Integrated Recognition System", annotated_frame)
                     except Exception as exc:  # noqa: BLE001
@@ -811,6 +827,8 @@ class IntegratedRecognitionSystem:
                         filename = f"integrated_system_{timestamp}.jpg"
                         cv2.imwrite(filename, annotated_frame)
                         logger.info(f"Saved frame: {filename}")
+
+                self._update_preview_frame(annotated_frame or frame)
                 
                 # Small delay for CPU
                 time.sleep(0.01)
